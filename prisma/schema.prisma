@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipType {
+  STUDENT
+  ANNUAL
+  LIFETIME
+}
+
+model User {
+  id                 String   @id @default(uuid())
+  email              String   @unique
+  username           String   @unique
+  password           String
+  isProfileCompleted Boolean  @default(false)
+  createdAt          DateTime @default(now())
+
+  refreshTokens     RefreshToken[]
+  membership        Membership?
+  basicInfo         BasicInfo?
+  practiceInfo      PracticeInfo?
+  medicalEducation  MedicalEducation?
+  address           Address?
+  OfficeInformation OfficeInformation?
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  tokenHash String
+  userId    String
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Membership {
+  id        String         @id @default(uuid())
+  userId    String         @unique
+  type      MembershipType
+  price     Int
+  isActive  Boolean        @default(true)
+  startedAt DateTime       @default(now())
+  expiresAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model BasicInfo {
+  id            String    @id @default(uuid())
+  userId        String    @unique
+  prefix        String
+  suffix        String?
+  firstName     String
+  middleName    String?
+  lastName      String
+  dateOfBirth   DateTime?
+  phoneNumber   String
+  maritalStatus String?
+  spouse        String?
+  imagePath     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PracticeInfo {
+  id                  String  @id @default(uuid())
+  userId              String  @unique
+  currentlyPracticing String
+  publicDirectory     Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MedicalEducation {
+  id                  String  @id @default(uuid())
+  userId              String  @unique
+  institutionName     String
+  graduationYear      Int
+  primarySpeciality   String
+  secondarySpeciality String?
+  internship          String?
+  residency           String?
+  fellowship1         String?
+  fellowship2         String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Address {
+  id        String  @id @default(uuid())
+  userId    String  @unique
+  address   String
+  city      String
+  country   String
+  state     String
+  zipCode   String
+  homePhone String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model OfficeInformation {
+  id          String  @id @default(uuid())
+  userId      String  @unique
+  office_name String
+  address1    String
+  city        String
+  country     String
+  state       String
+  zipCode     String
+  officePhone String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

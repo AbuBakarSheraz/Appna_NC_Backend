@@ -1,0 +1,14 @@
+
+{
+    when there is any change in schema
+    # 1. Edit schema.prisma
+# 2. Format it
+npx prisma format
+
+# 3. Create & apply migration
+npx prisma migrate dev -n add_address_table
+
+# 4. (Optional) regenerate client
+npx prisma generate
+
+}
