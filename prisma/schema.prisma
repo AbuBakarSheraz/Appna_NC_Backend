@@ -7,29 +7,69 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Enums
 enum MembershipType {
   STUDENT
   ANNUAL
   LIFETIME
 }
 
+enum Practicing {
+  ACADEMICS
+  NON_ACADEMICS
+}
+
+enum Prefix {
+  DR
+  MISS
+  MR
+  MRS
+  MS
+}
+
+enum Suffix {
+  DDS
+  DMD
+  DO
+  MD
+  NA
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+  WIDOWED
+}
+
+// ----------------------
+// Main User Table
+// ----------------------
 model User {
   id                 String   @id @default(uuid())
   email              String   @unique
   username           String   @unique
   password           String
+  prefix             Prefix?
+  suffix             Suffix?
+  imagePath          String?
   isProfileCompleted Boolean  @default(false)
+  profileStep        Int      @default(0) // Track multi-step completion
+  isAdmin   Boolean  @default(false)
   createdAt          DateTime @default(now())
 
+  // Relations
   refreshTokens     RefreshToken[]
   membership        Membership?
   basicInfo         BasicInfo?
-  practiceInfo      PracticeInfo?
   medicalEducation  MedicalEducation?
   address           Address?
-  OfficeInformation OfficeInformation?
+  officeInformation OfficeInformation?
 }
 
+// ----------------------
+// Refresh Tokens
+// ----------------------
 model RefreshToken {
   id        String   @id @default(uuid())
   tokenHash String
@@ -41,6 +81,9 @@ model RefreshToken {
   @@index([userId])
 }
 
+// ----------------------
+// Membership
+// ----------------------
 model Membership {
   id        String         @id @default(uuid())
   userId    String         @unique
@@ -53,69 +96,70 @@ model Membership {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+// ----------------------
+// Basic Info
+// ----------------------
 model BasicInfo {
-  id            String    @id @default(uuid())
-  userId        String    @unique
-  prefix        String
-  suffix        String?
+  id            String         @id @default(uuid())
+  userId        String         @unique
   firstName     String
-  middleName    String?
   lastName      String
   dateOfBirth   DateTime?
   phoneNumber   String
-  maritalStatus String?
+  maritalStatus MaritalStatus?
   spouse        String?
-  imagePath     String?
+  referredBy    String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-model PracticeInfo {
-  id                  String  @id @default(uuid())
-  userId              String  @unique
-  currentlyPracticing String
-  publicDirectory     Boolean @default(false)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
+// ----------------------
+// Medical Education
+// ----------------------
 model MedicalEducation {
-  id                  String  @id @default(uuid())
-  userId              String  @unique
+  id                  String      @id @default(uuid())
+  userId              String      @unique
   institutionName     String
   graduationYear      Int
-  primarySpeciality   String
-  secondarySpeciality String?
+  primarySpecialty    String
+  secondarySpecialty  String?
   internship          String?
   residency           String?
   fellowship1         String?
   fellowship2         String?
+  currentlyPracticing Practicing?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+// ----------------------
+// Address
+// ----------------------
 model Address {
   id        String  @id @default(uuid())
   userId    String  @unique
-  address   String
+  street    String
   city      String
-  country   String
   state     String
   zipCode   String
+  country   String
   homePhone String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+// ----------------------
+// Office Information
+// ----------------------
 model OfficeInformation {
   id          String  @id @default(uuid())
   userId      String  @unique
-  office_name String
-  address1    String
+  officeName  String
+  street      String
   city        String
-  country     String
   state       String
   zipCode     String
+  country     String
   officePhone String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
