@@ -15,9 +15,19 @@ async function bootstrap() {
       'http://localhost:3000',
       'http://localhost:3001',
       'http://localhost:5173',
+      'https://apppnanc.org',
+      'https://www.apppnanc.org'
     ],
     credentials: true,
   });
+
+  app.enableCors({
+  origin: [
+    'https://apppnanc.org',
+    'https://www.apppnanc.org'
+  ],
+  credentials: true,
+});
 
   // ✅ Serve uploads folder
   app.useStaticAssets(join(process.cwd(), 'uploads'), {
