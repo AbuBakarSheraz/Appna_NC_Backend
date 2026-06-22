@@ -11,7 +11,7 @@ export class MembershipService {
     let expiresAt: Date | null = null;
 
     if (type === MembershipTypeEnum.ANNUAL) {
-      price = 200;
+      price = 1;
       expiresAt = this.calcExpiry();
     }
 
@@ -21,7 +21,7 @@ export class MembershipService {
     }
 
     if (type === MembershipTypeEnum.LIFETIME) {
-      price = 500;
+      price = 1;
       expiresAt = null;
     }
 
