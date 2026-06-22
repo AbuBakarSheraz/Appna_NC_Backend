@@ -1,9 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../src/mail/mail.service';
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(AdminService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mailService: MailService,
+  ) {}
 
   // ─────────────────────────────────────────────────────────────────
   // GET ALL USERS  (paginated + searchable)
@@ -60,6 +66,10 @@ export class AdminService {
               isActive:  true,
               startedAt: true,
               expiresAt: true,
+              paymentStatus: true,
+              paidAt: true,
+              paypalOrderId: true,
+              paypalCaptureId: true,
             },
           },
         },
@@ -83,7 +93,14 @@ export class AdminService {
   // ─────────────────────────────────────────────────────────────────
   async getPendingPayments() {
     const memberships = await this.prisma.membership.findMany({
-      where: { isActive: false },
+      where: {
+        isActive: false,
+        price: { gt: 0 },
+        OR: [
+          { paymentStatus: 'PAID' },
+          { paidAt: { not: null } },
+        ],
+      },
       orderBy: { startedAt: 'asc' }, // oldest first so nobody waits forever
       include: {
         user: {
@@ -115,19 +132,38 @@ export class AdminService {
   // ─────────────────────────────────────────────────────────────────
   async confirmPayment(userId: string) {
     // Verify user exists before touching anything
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        basicInfo: { select: { firstName: true, lastName: true } },
+        membership: true,
+      },
+    });
     if (!user) throw new NotFoundException('User not found');
 
     await this.prisma.$transaction([
       this.prisma.membership.update({
         where: { userId },
-        data:  { isActive: true },
+        data:  { isActive: true, paymentStatus: 'CONFIRMED' },
       }),
       this.prisma.user.update({
         where: { id: userId },
         data:  { isProfileCompleted: true, profileStep: 5 },
       }),
     ]);
+
+    try {
+      await this.mailService.sendMembershipConfirmed({
+        memberName: this.memberName(user),
+        memberEmail: user.email,
+        membershipType: this.membershipLabel(user.membership?.type ?? ''),
+        loginUrl: process.env.FRONTEND_URL
+          ? `${process.env.FRONTEND_URL.replace(/\/$/, '')}/login`
+          : undefined,
+      });
+    } catch (err) {
+      this.logger.error('Failed to send membership confirmation email', err);
+    }
 
     return { message: `Membership confirmed for ${user.email}` };
   }
@@ -146,7 +182,7 @@ export class AdminService {
     await this.prisma.$transaction([
       this.prisma.membership.update({
         where: { userId },
-        data:  { isActive: true },
+        data:  { isActive: true, paymentStatus: 'NOT_REQUIRED' },
       }),
       this.prisma.user.update({
         where: { id: userId },
@@ -191,7 +227,16 @@ export class AdminService {
     ] = await Promise.all([
       this.prisma.user.count(),
       this.prisma.user.count({ where: { isProfileCompleted: true } }),
-      this.prisma.membership.count({ where: { isActive: false } }),
+      this.prisma.membership.count({
+        where: {
+          isActive: false,
+          price: { gt: 0 },
+          OR: [
+            { paymentStatus: 'PAID' },
+            { paidAt: { not: null } },
+          ],
+        },
+      }),
       this.prisma.membership.count({ where: { isActive: true } }),
       this.prisma.membership.count({ where: { type: 'STUDENT',  isActive: true } }),
       this.prisma.membership.count({ where: { type: 'ANNUAL',   isActive: true } }),
@@ -205,5 +250,21 @@ export class AdminService {
       activeMembers,
       breakdown: { student: studentMembers, annual: annualMembers, lifetime: lifetimeMembers },
     };
+  }
+
+  private memberName(user: {
+    username: string;
+    basicInfo?: { firstName: string; lastName: string } | null;
+  }) {
+    return user.basicInfo
+      ? `${user.basicInfo.firstName} ${user.basicInfo.lastName}`
+      : user.username;
+  }
+
+  private membershipLabel(type: string) {
+    if (type === 'STUDENT') return 'Resident / Fellow in Training';
+    if (type === 'ANNUAL') return 'Annual';
+    if (type === 'LIFETIME') return 'Lifetime';
+    return type || 'Membership';
   }
 }

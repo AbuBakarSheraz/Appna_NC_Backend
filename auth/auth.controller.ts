@@ -48,6 +48,7 @@ export class AuthController {
     return {
       access_token: result.access_token,
       profileCompleted: result.profileCompleted,
+      isAdmin: result.isAdmin,
     };
   }
 
@@ -62,18 +63,17 @@ async refresh(
     throw new UnauthorizedException('No refresh token');
   }
 
-  const { access_token, refresh_token } =
-    await this.auth.refresh(token);
+  const result = await this.auth.refresh(token);
 
-  this.setRefreshCookie(res, refresh_token);
+  this.setRefreshCookie(res, result.refresh_token);
 
-  return { access_token };
+  return { access_token: result.access_token, isAdmin: result.isAdmin };
 }
 
 
   @Post('logout')
   logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie('refresh_token', { path: '/auth/refresh' });
+    res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
     return { message: 'Logged out' };
   }
 
@@ -82,7 +82,7 @@ async refresh(
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      path: '/auth/refresh',
+      path: '/api/auth/refresh',
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
   }

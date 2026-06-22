@@ -42,6 +42,50 @@ enum MaritalStatus {
   WIDOWED
 }
 
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  COMPLETED
+  CANCELLED
+}
+
+enum RegistrationFieldType {
+  TEXT
+  EMAIL
+  PHONE
+  NUMBER
+  SELECT
+  TEXTAREA
+  CHECKBOX
+  DATE
+}
+
+enum EventPaymentStatus {
+  PENDING
+  ORDER_CREATED
+  PAID
+  FAILED
+  REFUNDED
+  NOT_REQUIRED
+}
+
+enum TicketRequestStatus {
+  PENDING_PAYMENT
+  PAYMENT_COMPLETED
+  AWAITING_ADMIN_CONFIRMATION
+  CONFIRMED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+enum TicketStatus {
+  VALID
+  USED
+  INVALIDATED
+  EXPIRED
+}
+
 // ----------------------
 // Main User Table
 // ----------------------
@@ -65,6 +109,27 @@ model User {
   medicalEducation  MedicalEducation?
   address           Address?
   officeInformation OfficeInformation?
+  eventRequests     TicketRequest[] @relation("EventRequester")
+  reviewedTicketRequests TicketRequest[] @relation("EventRequestReviewer")
+  eventTickets      Ticket[]        @relation("TicketOwner")
+  checkedInTickets  Ticket[]        @relation("TicketChecker")
+  notifications     Notification[]
+}
+
+enum NotificationAudience {
+  USER
+  ADMIN
+}
+
+enum NotificationType {
+  PAYMENT_RECEIVED
+  TICKET_APPROVED
+  TICKET_REJECTED
+  MEMBERSHIP_APPROVED
+  MEMBERSHIP_EXPIRED
+  NEW_REGISTRATION
+  NEW_PAYMENT
+  APPROVAL_REQUIRED
 }
 
 // ----------------------
@@ -85,13 +150,20 @@ model RefreshToken {
 // Membership
 // ----------------------
 model Membership {
-  id        String         @id @default(uuid())
-  userId    String         @unique
-  type      MembershipType
-  price     Int
-  isActive  Boolean        @default(true)
-  startedAt DateTime       @default(now())
-  expiresAt DateTime?
+  id                  String         @id @default(uuid())
+  userId              String         @unique
+  type                MembershipType
+  price               Int
+  isActive            Boolean        @default(true)
+  startedAt           DateTime       @default(now())
+  expiresAt           DateTime?
+  paymentProvider     String?
+  paymentStatus       String         @default("PENDING")
+  paypalOrderId       String?        @unique
+  paypalCaptureId     String?
+  paidAt              DateTime?
+  paymentNotifiedAt   DateTime?
+  expiredNoticeSentAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -163,4 +235,159 @@ model OfficeInformation {
   officePhone String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Event {
+  id            String      @id @default(uuid())
+  title         String
+  slug          String      @unique
+  description   String      @db.Text
+  category      String
+  bannerImage   String?
+  date          DateTime
+  startTime     String
+  endTime       String
+  venue         String
+  googleMapsUrl String?
+  capacity      Int
+  ticketPrice   Int
+  status        EventStatus @default(DRAFT)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  registrationFields EventRegistrationField[]
+  ticketRequests     TicketRequest[]
+  tickets            Ticket[]
+  auditLogs          EventAuditLog[]
+
+  @@index([status, date])
+  @@index([slug])
+}
+
+model EventRegistrationField {
+  id        String                @id @default(uuid())
+  eventId   String
+  key       String
+  label     String
+  type      RegistrationFieldType @default(TEXT)
+  required  Boolean               @default(false)
+  options   Json?
+  position  Int                   @default(0)
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, key])
+  @@index([eventId, position])
+}
+
+model TicketRequest {
+  id                String              @id @default(uuid())
+  requestNumber     String              @unique
+  eventId           String
+  userId            String?
+  fullName          String
+  email             String
+  phone             String
+  cnic              String?
+  city              String?
+  organization      String?
+  designation       String?
+  answers           Json?
+  paymentProvider   String?
+  paymentStatus     EventPaymentStatus  @default(PENDING)
+  paymentAmount     Int
+  paypalOrderId     String?             @unique
+  paypalCaptureId   String?
+  paidAt            DateTime?
+  approvalStatus    TicketRequestStatus @default(PENDING_PAYMENT)
+  adminNotes        String?             @db.Text
+  reviewedById      String?
+  reviewedAt        DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  event      Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user       User?   @relation("EventRequester", fields: [userId], references: [id], onDelete: SetNull)
+  reviewedBy User?   @relation("EventRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  ticket     Ticket?
+
+  @@index([eventId, approvalStatus])
+  @@index([email])
+  @@index([userId])
+}
+
+model Ticket {
+  id                 String       @id @default(uuid())
+  ticketNumber       String       @unique
+  registrationNumber String       @unique
+  requestId          String       @unique
+  eventId            String
+  userId             String?
+  attendeeName       String
+  attendeeEmail      String
+  qrPayloadHash      String       @unique
+  qrSecret           String
+  qrCodeDataUrl      String       @db.LongText
+  ticketImageDataUrl String?      @db.LongText
+  status             TicketStatus @default(VALID)
+  issueDate          DateTime     @default(now())
+  usedAt             DateTime?
+  checkedInById      String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  request     TicketRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User?         @relation("TicketOwner", fields: [userId], references: [id], onDelete: SetNull)
+  checkedInBy User?         @relation("TicketChecker", fields: [checkedInById], references: [id], onDelete: SetNull)
+  checkIns    TicketCheckIn[]
+
+  @@index([eventId, status])
+  @@index([userId])
+}
+
+model TicketCheckIn {
+  id          String   @id @default(uuid())
+  ticketId    String
+  checkedInBy String?
+  scannedAt   DateTime @default(now())
+  result      String
+  ipAddress   String?
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, scannedAt])
+}
+
+model EventAuditLog {
+  id        String   @id @default(uuid())
+  eventId   String?
+  actorId   String?
+  action    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  event Event? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model Notification {
+  id        String               @id @default(uuid())
+  userId    String?
+  audience  NotificationAudience
+  type      NotificationType
+  title     String
+  message   String               @db.Text
+  metadata  Json?
+  readAt    DateTime?
+  createdAt DateTime             @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([audience, readAt, createdAt])
 }

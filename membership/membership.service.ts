@@ -11,15 +11,13 @@ export class MembershipService {
     let expiresAt: Date | null = null;
 
     if (type === MembershipTypeEnum.ANNUAL) {
-      price = 50;
-      expiresAt = new Date();
-      expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+      price = 200;
+      expiresAt = this.calcExpiry();
     }
 
     if (type === MembershipTypeEnum.STUDENT) {
       price = 0;
-      expiresAt = new Date();
-      expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+      expiresAt = this.calcExpiry();
     }
 
     if (type === MembershipTypeEnum.LIFETIME) {
@@ -34,6 +32,8 @@ export class MembershipService {
         price,
         expiresAt,
         isActive: false,
+        paymentProvider: price > 0 ? 'PAYPAL' : null,
+        paymentStatus: price > 0 ? 'PENDING' : 'NOT_REQUIRED',
       },
       create: {
         userId,
@@ -41,6 +41,8 @@ export class MembershipService {
         price,
         expiresAt,
         isActive: false,
+        paymentProvider: price > 0 ? 'PAYPAL' : null,
+        paymentStatus: price > 0 ? 'PENDING' : 'NOT_REQUIRED',
       },
     });
   }
@@ -49,5 +51,10 @@ export class MembershipService {
     return this.prisma.membership.findUnique({
       where: { userId },
     });
+  }
+
+  private calcExpiry(): Date {
+    const now = new Date();
+    return new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
   }
 }

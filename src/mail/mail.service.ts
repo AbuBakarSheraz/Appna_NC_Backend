@@ -34,7 +34,266 @@ export class MailService implements OnModuleInit {
     }
   }
 
+  async sendMembershipPaymentReceived(dto: {
+    memberName: string;
+    memberEmail: string;
+    membershipType: string;
+    amount: number;
+    paypalOrderId?: string | null;
+    paypalCaptureId?: string | null;
+  }): Promise<void> {
+    const submittedAt = this.formatEasternTime(new Date());
+
+    await Promise.all([
+      this.transporter.sendMail({
+        from: `"APPNA NC Membership" <${SENDER}>`,
+        to: ORG_INBOX,
+        replyTo: dto.memberEmail,
+        subject: `Membership payment received - ${dto.memberName}`,
+        html: this.wrapEmail({
+          title: 'Membership Payment Received',
+          subtitle: submittedAt,
+          body: `
+            <h2>Payment is ready for admin confirmation</h2>
+            <p><strong>${dto.memberName}</strong> has completed PayPal payment for APPNA NC membership.</p>
+            <div class="highlight">
+              <strong>Member:</strong> ${dto.memberName}<br/>
+              <strong>Email:</strong> <a href="mailto:${dto.memberEmail}">${dto.memberEmail}</a><br/>
+              <strong>Plan:</strong> ${dto.membershipType}<br/>
+              <strong>Amount:</strong> $${dto.amount} USD<br/>
+              <strong>PayPal Order ID:</strong> ${dto.paypalOrderId ?? 'N/A'}<br/>
+              <strong>PayPal Capture ID:</strong> ${dto.paypalCaptureId ?? 'N/A'}
+            </div>
+            <p>Please verify the payment in PayPal and press <strong>Confirm Payment</strong> in the admin panel.</p>
+          `,
+        }),
+      }),
+      this.transporter.sendMail({
+        from: `"APPNA NC Membership" <${SENDER}>`,
+        to: dto.memberEmail,
+        subject: 'We received your APPNA NC membership payment',
+        html: this.wrapEmail({
+          title: 'Payment Received',
+          subtitle: 'APPNA North Carolina',
+          body: `
+            <h2>Hi ${dto.memberName},</h2>
+            <p>Thank you. We received your payment for the <strong>${dto.membershipType}</strong> membership.</p>
+            <div class="highlight">An APPNA NC admin will review your payment and send your membership confirmation within <strong>24 hours</strong>.</div>
+            <p>Your login uses the email and password you created during registration. You will receive an activation email as soon as the admin confirms your membership.</p>
+            <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
+          `,
+        }),
+      }),
+    ]);
+  }
+
+  async sendMembershipConfirmed(dto: {
+    memberName: string;
+    memberEmail: string;
+    membershipType: string;
+    loginUrl?: string;
+  }): Promise<void> {
+    await this.transporter.sendMail({
+      from: `"APPNA NC Membership" <${SENDER}>`,
+      to: dto.memberEmail,
+      subject: 'Your APPNA NC membership is active',
+      html: this.wrapEmail({
+        title: 'Membership Confirmed',
+        subtitle: 'APPNA North Carolina',
+        body: `
+          <h2>Hi ${dto.memberName},</h2>
+          <p>Your <strong>${dto.membershipType}</strong> membership has been confirmed and your member portal access is now active.</p>
+          <div class="highlight">
+            <strong>Login email:</strong> ${dto.memberEmail}<br/>
+            <strong>Password:</strong> the password you created during registration
+          </div>
+          <p>You can now sign in and access your membership dashboard.</p>
+          ${dto.loginUrl ? `<p><a class="btn" href="${dto.loginUrl}">Open Member Login</a></p>` : ''}
+          <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
+        `,
+      }),
+    });
+  }
+
+  async sendMembershipExpired(dto: {
+    memberName: string;
+    memberEmail: string;
+    membershipType: string;
+    expiredAt: Date;
+  }): Promise<void> {
+    await this.transporter.sendMail({
+      from: `"APPNA NC Membership" <${SENDER}>`,
+      to: dto.memberEmail,
+      subject: 'Your APPNA NC membership has expired',
+      html: this.wrapEmail({
+        title: 'Membership Expired',
+        subtitle: 'APPNA North Carolina',
+        body: `
+          <h2>Hi ${dto.memberName},</h2>
+          <p>Your <strong>${dto.membershipType}</strong> membership expired on <strong>${dto.expiredAt.toLocaleDateString('en-US', {
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+          })}</strong>.</p>
+          <div class="highlight">Annual memberships expire on <strong>December 31</strong> each year. Please renew from your member portal to restore full access.</div>
+          <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
+        `,
+      }),
+    });
+  }
+
   // ── 1. Auto-reply to the person who submitted the form ───────────
+  async sendEventPaymentReceived(dto: {
+    attendeeName: string;
+    attendeeEmail: string;
+    eventName: string;
+    amount: number;
+    paypalOrderId?: string | null;
+    paypalCaptureId?: string | null;
+    reviewUrl?: string;
+  }): Promise<void> {
+    const submittedAt = this.formatEasternTime(new Date());
+
+    await Promise.all([
+      this.transporter.sendMail({
+        from: `"APPNA NC Events" <${SENDER}>`,
+        to: dto.attendeeEmail,
+        subject: 'Payment Received - APPNA NC Event Registration',
+        html: this.wrapEmail({
+          title: 'Payment Received',
+          subtitle: 'APPNA North Carolina Events',
+          body: `
+            <h2>Hi ${dto.attendeeName},</h2>
+            <p>Your payment for <strong>${dto.eventName}</strong> was received successfully.</p>
+            <div class="highlight">
+              Your registration request has been submitted. Our team will verify your details, and ticket approval may take up to <strong>24 hours</strong>.
+            </div>
+            <p>You will receive another email once your ticket is approved.</p>
+            <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
+          `,
+        }),
+      }),
+      this.transporter.sendMail({
+        from: `"APPNA NC Events" <${SENDER}>`,
+        to: ORG_INBOX,
+        replyTo: dto.attendeeEmail,
+        subject: 'New Event Registration Waiting for Approval',
+        html: this.wrapEmail({
+          title: 'New Event Registration',
+          subtitle: submittedAt,
+          body: `
+            <h2>Registration awaiting review</h2>
+            <div class="highlight">
+              <strong>Event:</strong> ${dto.eventName}<br/>
+              <strong>Attendee:</strong> ${dto.attendeeName}<br/>
+              <strong>Email:</strong> <a href="mailto:${dto.attendeeEmail}">${dto.attendeeEmail}</a><br/>
+              <strong>Amount:</strong> $${dto.amount} USD<br/>
+              <strong>PayPal Order ID:</strong> ${dto.paypalOrderId ?? 'N/A'}<br/>
+              <strong>PayPal Capture ID:</strong> ${dto.paypalCaptureId ?? 'N/A'}
+            </div>
+            ${dto.reviewUrl ? `<p><a class="btn" href="${dto.reviewUrl}">Review Request</a></p>` : ''}
+          `,
+        }),
+      }),
+    ]);
+  }
+
+  async sendTicketApproved(dto: {
+    attendeeName: string;
+    attendeeEmail: string;
+    eventName: string;
+    eventDate: Date;
+    eventTime: string;
+    eventLocation: string;
+    ticketNumber: string;
+    registrationNumber: string;
+    ticketImageDataUrl?: string | null;
+    ticketAccessUrl?: string;
+  }): Promise<void> {
+    const eventDate = dto.eventDate.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+
+    await this.transporter.sendMail({
+      from: `"APPNA NC Events" <${SENDER}>`,
+      to: dto.attendeeEmail,
+      subject: 'Your Event Ticket Has Been Approved',
+      html: this.wrapEmail({
+        title: 'Ticket Approved',
+        subtitle: 'APPNA North Carolina Events',
+        body: `
+          <h2>Hi ${dto.attendeeName},</h2>
+          <p>Your ticket for <strong>${dto.eventName}</strong> has been approved.</p>
+          <div class="highlight">
+            <strong>Ticket ID:</strong> ${dto.ticketNumber}<br/>
+            <strong>Registration:</strong> ${dto.registrationNumber}<br/>
+            <strong>Date:</strong> ${eventDate}<br/>
+            <strong>Time:</strong> ${dto.eventTime}<br/>
+            <strong>Location:</strong> ${dto.eventLocation}
+          </div>
+          <p>Please bring the attached ticket or have it ready on your phone for QR check-in.</p>
+          ${dto.ticketAccessUrl ? `<p><a class="btn" href="${dto.ticketAccessUrl}">Open My Tickets</a></p>` : ''}
+        `,
+      }),
+      attachments: dto.ticketImageDataUrl
+        ? [{ filename: `${dto.ticketNumber}.svg`, path: dto.ticketImageDataUrl }]
+        : undefined,
+    });
+  }
+
+  async sendTicketRejected(dto: {
+    attendeeName: string;
+    attendeeEmail: string;
+    eventName: string;
+    notes?: string;
+  }): Promise<void> {
+    await this.transporter.sendMail({
+      from: `"APPNA NC Events" <${SENDER}>`,
+      to: dto.attendeeEmail,
+      subject: `Ticket request update - ${dto.eventName}`,
+      html: this.wrapEmail({
+        title: 'Ticket Request Update',
+        subtitle: 'APPNA North Carolina Events',
+        body: `
+          <h2>Hi ${dto.attendeeName},</h2>
+          <p>Your ticket request for <strong>${dto.eventName}</strong> was not approved.</p>
+          ${dto.notes ? `<div class="highlight"><strong>Admin note:</strong> ${dto.notes}</div>` : ''}
+          <p>If you believe this was a mistake, please reply to this email and our team will review it.</p>
+        `,
+      }),
+    });
+  }
+
+  async sendEventReminder(dto: {
+    attendeeName: string;
+    attendeeEmail: string;
+    eventName: string;
+    eventDate: Date;
+    eventTime: string;
+    eventLocation: string;
+  }): Promise<void> {
+    await this.transporter.sendMail({
+      from: `"APPNA NC Events" <${SENDER}>`,
+      to: dto.attendeeEmail,
+      subject: `Reminder: ${dto.eventName}`,
+      html: this.wrapEmail({
+        title: 'Event Reminder',
+        subtitle: 'APPNA North Carolina Events',
+        body: `
+          <h2>Hi ${dto.attendeeName},</h2>
+          <p>This is a reminder for <strong>${dto.eventName}</strong>.</p>
+          <div class="highlight">
+            <strong>Date:</strong> ${dto.eventDate.toLocaleDateString('en-US')}<br/>
+            <strong>Time:</strong> ${dto.eventTime}<br/>
+            <strong>Location:</strong> ${dto.eventLocation}
+          </div>
+        `,
+      }),
+    });
+  }
+
   private sendAcknowledgement(dto: ContactFormDto) {
     const year = new Date().getFullYear();
     return this.transporter.sendMail({
@@ -129,5 +388,52 @@ export class MailService implements OnModuleInit {
 </div>
 </body></html>`,
     });
+  }
+
+  private formatEasternTime(date: Date) {
+    return date.toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      dateStyle: 'full',
+      timeStyle: 'short',
+    });
+  }
+
+  private wrapEmail({
+    title,
+    subtitle,
+    body,
+  }: {
+    title: string;
+    subtitle: string;
+    body: string;
+  }) {
+    const year = new Date().getFullYear();
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body{margin:0;padding:0;background:#f8f9fb;font-family:Arial,sans-serif}
+  .wrap{max-width:600px;margin:40px auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb}
+  .hdr{background:#7a1f3d;padding:30px 40px;text-align:center}
+  .hdr h1{margin:0;color:#fff;font-size:22px;font-weight:600}
+  .hdr p{margin:6px 0 0;color:rgba(255,255,255,.75);font-size:13px}
+  .body{padding:34px 40px;color:#374151;font-size:15px;line-height:1.7}
+  .body h2{margin:0 0 16px;color:#7a1f3d;font-size:18px;font-weight:600}
+  .highlight{background:#fdf2f5;border-left:4px solid #7a1f3d;border-radius:0 8px 8px 0;padding:14px 18px;margin:20px 0;font-size:14px;color:#4b1c2e}
+  .btn{display:inline-block;margin-top:10px;padding:12px 22px;background:#7a1f3d;color:#fff!important;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600}
+  .footer{background:#f8f9fb;padding:18px 40px;text-align:center;font-size:12px;color:#9ca3af;border-top:1px solid #e5e7eb}
+  a{color:#7a1f3d}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <h1>${title}</h1>
+    <p>${subtitle}</p>
+  </div>
+  <div class="body">${body}</div>
+  <div class="footer">© ${year} APPNA North Carolina Chapter</div>
+</div>
+</body></html>`;
   }
 }

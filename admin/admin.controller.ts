@@ -4,9 +4,10 @@ import {
   DefaultValuePipe,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt.guard';
+import { AdminGuard } from '../common/guards/admin.guard';
 import { AdminService } from './admin.service';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('admin')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}

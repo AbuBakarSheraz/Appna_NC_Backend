@@ -1,7 +1,8 @@
 import {
+  BadRequestException,
+  ConflictException,
   Injectable,
   UnauthorizedException,
-  ConflictException,
 } from '@nestjs/common';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -19,7 +20,11 @@ export class AuthService {
   //========== ISSUE TOKENS ==========
 
   private async issueTokens(userId : string) {
-    const payload = { sub: userId};
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isAdmin: true },
+    });
+    const payload = { sub: userId, isAdmin: !!user?.isAdmin };
     const accessToken = await this.jwt.signAsync(payload, {
       expiresIn: '15m',
     });
@@ -33,6 +38,7 @@ export class AuthService {
     return {
       access_token : accessToken,
       refresh_token: refreshToken,
+      isAdmin: !!user?.isAdmin,
     };
 
   }
@@ -123,12 +129,16 @@ async register(dto: RegisterDto, file?: Express.Multer.File) {
 }
   // ================= LOGIN =================
   async login(dto: LoginDto) {
+    if (!dto.email || !dto.password) {
+      throw new BadRequestException('Email and password are required');
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
 
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Account not found');
     }
 
     const passwordValid = await bcrypt.compare(
@@ -137,7 +147,7 @@ async register(dto: RegisterDto, file?: Express.Multer.File) {
     );
 
     if (!passwordValid) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid email or password');
     }
 
     return {

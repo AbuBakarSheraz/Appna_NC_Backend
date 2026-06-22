@@ -4,11 +4,12 @@ import { ProfileController } from './profile.controller';
 import { ProfileService } from './profile.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AdminModule } from '../admin/admin.module';
+import { MailModule } from '../src/mail/mail.module';
 
 
 @Module({
   imports: [
-    PrismaModule,AdminModule,
+    PrismaModule,AdminModule,MailModule,
 
     // Register Multer globally for this module.
     // The actual per-route storage config lives in the controller,

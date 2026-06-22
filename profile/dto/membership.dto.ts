@@ -4,9 +4,9 @@ import { MembershipType } from '@prisma/client';
 // ─── Membership pricing (single source of truth) ─────────────────
 // Keep this here so the controller/service never hard-code prices.
 export const MEMBERSHIP_PRICING: Record<MembershipType, number> = {
-  [MembershipType.STUDENT]:  50,   // USD
+  [MembershipType.STUDENT]:  0,   // Resident / Fellow in Training
   [MembershipType.ANNUAL]:   200,
-  [MembershipType.LIFETIME]: 1500,
+  [MembershipType.LIFETIME]: 500,
 };
 
 export class MembershipDto {

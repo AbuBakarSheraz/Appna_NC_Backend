@@ -150,8 +150,13 @@ export class ProfileController {
   // Production recommendation: trigger this from your Stripe webhook
   // handler instead of the frontend — it's more tamper-proof.
   // ──────────────────────────────────────────────────────────────
-  @Patch('membership/confirm')
-  confirmPayment(@Req() req) {
-    return this.service.confirmPayment(req.user.userId);
+  @Post('membership/paypal/create-order')
+  createPayPalOrder(@Req() req) {
+    return this.service.createPayPalOrder(req.user.userId);
+  }
+
+  @Post('membership/paypal/capture')
+  capturePayPalOrder(@Req() req, @Body('orderId') orderId: string) {
+    return this.service.capturePayPalOrder(req.user.userId, orderId);
   }
 }
