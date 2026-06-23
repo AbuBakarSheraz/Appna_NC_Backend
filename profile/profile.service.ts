@@ -284,7 +284,7 @@ async selectMembership(userId: string, dto: MembershipDto) {
       throw new BadRequestException('This membership does not require payment.');
     }
 
-    const frontendUrl = process.env.FRONTEND_URL ?? process.env.APP_URL ?? 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL ?? process.env.APP_URL ?? 'https://appnanc.org';
     const cleanFrontendUrl = frontendUrl.replace(/\/$/, '');
     const order = await this.paypalRequest<{
       id: string;

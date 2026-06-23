@@ -1011,7 +1011,7 @@ export class EventsService {
   }
 
   private frontendUrl(path: string) {
-    return `${(process.env.FRONTEND_URL ?? 'http://localhost:3000').replace(/\/$/, '')}${path}`;
+    return `${(process.env.FRONTEND_URL ?? 'https://appnanc.org').replace(/\/$/, '')}${path}`;
   }
 
   private xml(value: string) {
