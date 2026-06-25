@@ -5,6 +5,25 @@ import cookieParser from 'cookie-parser';
 import { join } from 'path';
 import { AppModule } from './app.module';
 
+function corsOrigins() {
+  const configured = process.env.CORS_ORIGINS
+    ?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  if (configured?.length) return configured;
+
+  return [
+    process.env.FRONTEND_URL,
+    process.env.APP_URL,
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:5173',
+    'https://appnanc.org',
+    'https://www.appnanc.org',
+  ].filter(Boolean) as string[];
+}
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
@@ -13,13 +32,7 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   app.enableCors({
-    origin: [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:5173',
-      'https://appnanc.org',
-      'https://www.appnanc.org',
-    ],
+    origin: corsOrigins(),
     credentials: true,
   });
 

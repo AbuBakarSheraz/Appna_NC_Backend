@@ -14,8 +14,14 @@ import { AdminService } from '../admin/admin.service';
 import { MailService } from '../src/mail/mail.service';
 
 // Base URL used to build public image URLs.
-// In production, set APP_URL in your .env to your CDN or domain.
-const BASE_URL = process.env.APP_URL ?? 'http://localhost:1018';
+// In production, set APP_URL or BACKEND_PUBLIC_URL to the public backend/CDN URL.
+function publicBackendUrl() {
+  return (
+    process.env.BACKEND_PUBLIC_URL ??
+    process.env.APP_URL ??
+    (process.env.NODE_ENV === 'production' ? 'https://api.appnanc.org' : 'http://localhost:1018')
+  ).replace(/\/$/, '');
+}
 
 // ─── Step constants — single source of truth ─────────────────────
 // If you ever reorder the onboarding flow, only change numbers here.
@@ -515,7 +521,7 @@ async selectMembership(userId: string, dto: MembershipDto) {
   /** Converts a stored file path to a full public URL, or null. */
   private buildImageUrl(imagePath: string | null): string | null {
     if (!imagePath) return null;
-    return `${BASE_URL}/${imagePath.replace(/\\/g, '/')}`;
+    return `${publicBackendUrl()}/${imagePath.replace(/\\/g, '/')}`;
   }
 
   private async paypalRequest<T>(path: string, init: RequestInit): Promise<T> {
