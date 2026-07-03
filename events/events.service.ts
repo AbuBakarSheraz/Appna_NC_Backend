@@ -792,7 +792,7 @@ export class EventsService {
   }
 
   private eventReferenceId(requestId: string) {
-    return `ticket_${requestId}`;
+    return `ticket_${requestId}`.substring(0, 40);
   }
 
   private signQrPayload(payload: Record<string, string>) {

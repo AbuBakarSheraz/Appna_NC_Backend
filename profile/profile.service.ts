@@ -552,9 +552,14 @@ async selectMembership(userId: string, dto: MembershipDto) {
     return `${publicBackendUrl()}/${imagePath.replace(/\\/g, '/')}`;
   }
 
-  private membershipReferenceId(membershipId: string) {
-    return `membership_${membershipId}`;
-  }
+private membershipReferenceId(membershipId: string): string {
+  const fullId = `membership_${membershipId}`;
+  
+  if (fullId.length <= 40) return fullId;
+  
+  // Always unique, always 32 characters
+  return crypto.createHash('md5').update(fullId).digest('hex');
+}
 
   private memberName(user: {
     username: string;
