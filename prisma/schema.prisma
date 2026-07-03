@@ -161,6 +161,9 @@ model Membership {
   paymentStatus       String         @default("PENDING")
   paypalOrderId       String?        @unique
   paypalCaptureId     String?
+  squarePaymentLinkId String?        @unique
+  squareOrderId       String?        @unique
+  squarePaymentId     String?
   paidAt              DateTime?
   paymentNotifiedAt   DateTime?
   expiredNoticeSentAt DateTime?
@@ -298,8 +301,12 @@ model TicketRequest {
   paymentProvider   String?
   paymentStatus     EventPaymentStatus  @default(PENDING)
   paymentAmount     Int
+  ticketQuantity    Int                 @default(1)
   paypalOrderId     String?             @unique
   paypalCaptureId   String?
+  squarePaymentLinkId String?            @unique
+  squareOrderId     String?              @unique
+  squarePaymentId   String?
   paidAt            DateTime?
   approvalStatus    TicketRequestStatus @default(PENDING_PAYMENT)
   adminNotes        String?             @db.Text
@@ -311,7 +318,7 @@ model TicketRequest {
   event      Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
   user       User?   @relation("EventRequester", fields: [userId], references: [id], onDelete: SetNull)
   reviewedBy User?   @relation("EventRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
-  ticket     Ticket?
+  tickets    Ticket[]
 
   @@index([eventId, approvalStatus])
   @@index([email])
@@ -322,7 +329,8 @@ model Ticket {
   id                 String       @id @default(uuid())
   ticketNumber       String       @unique
   registrationNumber String       @unique
-  requestId          String       @unique
+  requestId          String
+  ticketIndex        Int          @default(1)
   eventId            String
   userId             String?
   attendeeName       String
@@ -345,7 +353,9 @@ model Ticket {
   checkIns    TicketCheckIn[]
 
   @@index([eventId, status])
+  @@index([requestId])
   @@index([userId])
+  @@unique([requestId, ticketIndex])
 }
 
 model TicketCheckIn {

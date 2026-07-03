@@ -32,7 +32,7 @@ export class MembershipService {
         price,
         expiresAt,
         isActive: false,
-        paymentProvider: price > 0 ? 'PAYPAL' : null,
+        paymentProvider: price > 0 ? 'SQUARE' : null,
         paymentStatus: price > 0 ? 'PENDING' : 'NOT_REQUIRED',
       },
       create: {
@@ -41,7 +41,7 @@ export class MembershipService {
         price,
         expiresAt,
         isActive: false,
-        paymentProvider: price > 0 ? 'PAYPAL' : null,
+        paymentProvider: price > 0 ? 'SQUARE' : null,
         paymentStatus: price > 0 ? 'PENDING' : 'NOT_REQUIRED',
       },
     });

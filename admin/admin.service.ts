@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../src/mail/mail.service';
+import { buildMembershipCardPng } from '../common/card-image';
 
 @Injectable()
 export class AdminService {
@@ -157,6 +158,15 @@ export class AdminService {
         memberName: this.memberName(user),
         memberEmail: user.email,
         membershipType: this.membershipLabel(user.membership?.type ?? ''),
+        membershipCardDataUrl: user.membership
+          ? buildMembershipCardPng({
+              memberName: this.memberName(user),
+              memberEmail: user.email,
+              membershipType: this.membershipLabel(user.membership.type),
+              memberId: user.membership.id,
+              expiresAt: user.membership.expiresAt,
+            })
+          : undefined,
         loginUrl: process.env.FRONTEND_URL
           ? `${process.env.FRONTEND_URL.replace(/\/$/, '')}/login`
           : undefined,

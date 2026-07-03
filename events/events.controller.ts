@@ -2,7 +2,8 @@ import { Body, Controller, Get, Headers, Param, Post, Query, Req, UseGuards } fr
 import { JwtAuthGuard } from '../common/guards/jwt.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
 import { EventsService } from './events.service';
-import { CaptureEventPaymentDto, RegisterForEventDto, ValidateTicketDto } from './dto/event.dto';
+import { RegisterForEventDto, ValidateTicketDto, VerifyEventPaymentDto } from './dto/event.dto';
+import { SquareEventTokenPaymentDto } from '../payments/square-payment.dto';
 
 @Controller('events')
 export class EventsController {
@@ -23,14 +24,24 @@ export class EventsController {
     return this.eventsService.registerForEvent(eventId, dto);
   }
 
-  @Post('paypal/capture')
-  capturePayment(@Body() dto: CaptureEventPaymentDto) {
-    return this.eventsService.captureEventPayment(dto);
+  @Post('square/verify')
+  verifyPayment(@Body() dto: VerifyEventPaymentDto) {
+    return this.eventsService.verifyEventPayment(dto);
   }
 
-  @Post('paypal/webhook')
-  paypalWebhook(@Headers() headers: Record<string, string | string[]>, @Body() body: unknown) {
-    return this.eventsService.handlePayPalWebhook(headers, body);
+  @Post('square/pay')
+  payWithSquareToken(@Body() dto: SquareEventTokenPaymentDto) {
+    return this.eventsService.payEventWithSquareToken(dto);
+  }
+
+  @Post('square/webhook')
+  squareWebhook(@Req() req, @Headers() headers: Record<string, string | string[]>, @Body() body: unknown) {
+    return this.eventsService.handleSquareWebhook(headers, body, req.rawBody);
+  }
+
+  @Post('paypal/capture')
+  legacyCapturePayment(@Body() dto: VerifyEventPaymentDto) {
+    return this.eventsService.verifyEventPayment(dto);
   }
 }
 

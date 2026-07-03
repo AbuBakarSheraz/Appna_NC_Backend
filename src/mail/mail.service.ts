@@ -1,6 +1,7 @@
 import { Injectable, InternalServerErrorException, Logger, OnModuleInit } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import { ContactFormDto } from './dto/contact-form.dto';
+import { dataUrlAttachment } from '../../common/card-image';
 
 const SENDER    = process.env.MAIL_USER!;   // dev.appnanc@gmail.com
 const ORG_INBOX = process.env.MAIL_ORG!;    // appnanc@gmail.com
@@ -39,8 +40,9 @@ export class MailService implements OnModuleInit {
     memberEmail: string;
     membershipType: string;
     amount: number;
-    paypalOrderId?: string | null;
-    paypalCaptureId?: string | null;
+    paymentProvider?: string | null;
+    paymentOrderId?: string | null;
+    paymentTransactionId?: string | null;
   }): Promise<void> {
     const submittedAt = this.formatEasternTime(new Date());
 
@@ -55,16 +57,17 @@ export class MailService implements OnModuleInit {
           subtitle: submittedAt,
           body: `
             <h2>Payment is ready for admin confirmation</h2>
-            <p><strong>${dto.memberName}</strong> has completed PayPal payment for APPNA NC membership.</p>
+            <p><strong>${dto.memberName}</strong> has completed ${dto.paymentProvider ?? 'online'} payment for APPNA NC membership.</p>
             <div class="highlight">
               <strong>Member:</strong> ${dto.memberName}<br/>
               <strong>Email:</strong> <a href="mailto:${dto.memberEmail}">${dto.memberEmail}</a><br/>
               <strong>Plan:</strong> ${dto.membershipType}<br/>
               <strong>Amount:</strong> $${dto.amount} USD<br/>
-              <strong>PayPal Order ID:</strong> ${dto.paypalOrderId ?? 'N/A'}<br/>
-              <strong>PayPal Capture ID:</strong> ${dto.paypalCaptureId ?? 'N/A'}
+              <strong>Payment Provider:</strong> ${dto.paymentProvider ?? 'N/A'}<br/>
+              <strong>Payment Order ID:</strong> ${dto.paymentOrderId ?? 'N/A'}<br/>
+              <strong>Payment Transaction ID:</strong> ${dto.paymentTransactionId ?? 'N/A'}
             </div>
-            <p>Please verify the payment in PayPal and press <strong>Confirm Payment</strong> in the admin panel.</p>
+            <p>Please verify the payment in Square and press <strong>Confirm Payment</strong> in the admin panel.</p>
           `,
         }),
       }),
@@ -92,6 +95,7 @@ export class MailService implements OnModuleInit {
     memberEmail: string;
     membershipType: string;
     loginUrl?: string;
+    membershipCardDataUrl?: string | null;
   }): Promise<void> {
     await this.transporter.sendMail({
       from: `"APPNA NC Membership" <${SENDER}>`,
@@ -112,6 +116,11 @@ export class MailService implements OnModuleInit {
           <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
         `,
       }),
+      attachments: this.attachmentsFromDataUrls([
+        dto.membershipCardDataUrl
+          ? { dataUrl: dto.membershipCardDataUrl, filename: 'appna-nc-membership-card.png' }
+          : null,
+      ]),
     });
   }
 
@@ -148,8 +157,9 @@ export class MailService implements OnModuleInit {
     attendeeEmail: string;
     eventName: string;
     amount: number;
-    paypalOrderId?: string | null;
-    paypalCaptureId?: string | null;
+    paymentProvider?: string | null;
+    paymentOrderId?: string | null;
+    paymentTransactionId?: string | null;
     reviewUrl?: string;
   }): Promise<void> {
     const submittedAt = this.formatEasternTime(new Date());
@@ -188,8 +198,9 @@ export class MailService implements OnModuleInit {
               <strong>Attendee:</strong> ${dto.attendeeName}<br/>
               <strong>Email:</strong> <a href="mailto:${dto.attendeeEmail}">${dto.attendeeEmail}</a><br/>
               <strong>Amount:</strong> $${dto.amount} USD<br/>
-              <strong>PayPal Order ID:</strong> ${dto.paypalOrderId ?? 'N/A'}<br/>
-              <strong>PayPal Capture ID:</strong> ${dto.paypalCaptureId ?? 'N/A'}
+              <strong>Payment Provider:</strong> ${dto.paymentProvider ?? 'N/A'}<br/>
+              <strong>Payment Order ID:</strong> ${dto.paymentOrderId ?? 'N/A'}<br/>
+              <strong>Payment Transaction ID:</strong> ${dto.paymentTransactionId ?? 'N/A'}
             </div>
             ${dto.reviewUrl ? `<p><a class="btn" href="${dto.reviewUrl}">Review Request</a></p>` : ''}
           `,
@@ -205,9 +216,14 @@ export class MailService implements OnModuleInit {
     eventDate: Date;
     eventTime: string;
     eventLocation: string;
-    ticketNumber: string;
-    registrationNumber: string;
+    ticketNumber?: string;
+    registrationNumber?: string;
     ticketImageDataUrl?: string | null;
+    tickets?: Array<{
+      ticketNumber: string;
+      registrationNumber: string;
+      ticketImageDataUrl?: string | null;
+    }>;
     ticketAccessUrl?: string;
   }): Promise<void> {
     const eventDate = dto.eventDate.toLocaleDateString('en-US', {
@@ -216,19 +232,30 @@ export class MailService implements OnModuleInit {
       year: 'numeric',
     });
 
+    const tickets = dto.tickets?.length
+      ? dto.tickets
+      : [{
+          ticketNumber: dto.ticketNumber ?? 'Pending',
+          registrationNumber: dto.registrationNumber ?? 'Pending',
+          ticketImageDataUrl: dto.ticketImageDataUrl,
+        }];
+    const ticketRows = tickets.map((ticket, index) => `
+      <strong>Ticket ${index + 1}:</strong> ${ticket.ticketNumber}<br/>
+      <strong>Registration ${index + 1}:</strong> ${ticket.registrationNumber}
+    `).join('<br/>');
+
     await this.transporter.sendMail({
       from: `"APPNA NC Events" <${SENDER}>`,
       to: dto.attendeeEmail,
-      subject: 'Your Event Ticket Has Been Approved',
+      subject: tickets.length > 1 ? 'Your Event Tickets Have Been Approved' : 'Your Event Ticket Has Been Approved',
       html: this.wrapEmail({
-        title: 'Ticket Approved',
+        title: tickets.length > 1 ? 'Tickets Approved' : 'Ticket Approved',
         subtitle: 'APPNA North Carolina Events',
         body: `
           <h2>Hi ${dto.attendeeName},</h2>
-          <p>Your ticket for <strong>${dto.eventName}</strong> has been approved.</p>
+          <p>Your ${tickets.length > 1 ? `${tickets.length} tickets` : 'ticket'} for <strong>${dto.eventName}</strong> ${tickets.length > 1 ? 'have' : 'has'} been approved.</p>
           <div class="highlight">
-            <strong>Ticket ID:</strong> ${dto.ticketNumber}<br/>
-            <strong>Registration:</strong> ${dto.registrationNumber}<br/>
+            ${ticketRows}<br/>
             <strong>Date:</strong> ${eventDate}<br/>
             <strong>Time:</strong> ${dto.eventTime}<br/>
             <strong>Location:</strong> ${dto.eventLocation}
@@ -237,9 +264,11 @@ export class MailService implements OnModuleInit {
           ${dto.ticketAccessUrl ? `<p><a class="btn" href="${dto.ticketAccessUrl}">Open My Tickets</a></p>` : ''}
         `,
       }),
-      attachments: dto.ticketImageDataUrl
-        ? [{ filename: `${dto.ticketNumber}.svg`, path: dto.ticketImageDataUrl }]
-        : undefined,
+      attachments: this.attachmentsFromDataUrls(
+        tickets.map((ticket) => ticket.ticketImageDataUrl
+          ? { dataUrl: ticket.ticketImageDataUrl, filename: `${ticket.ticketNumber}.png` }
+          : null),
+      ),
     });
   }
 
@@ -435,5 +464,14 @@ export class MailService implements OnModuleInit {
   <div class="footer">© ${year} APPNA North Carolina Chapter</div>
 </div>
 </body></html>`;
+  }
+
+  private attachmentsFromDataUrls(
+    items: Array<{ dataUrl: string; filename: string } | null | undefined>,
+  ): nodemailer.SendMailOptions['attachments'] | undefined {
+    const attachments = items
+      .map((item) => item ? dataUrlAttachment(item.dataUrl, item.filename) : undefined)
+      .filter((item): item is NonNullable<ReturnType<typeof dataUrlAttachment>> => Boolean(item));
+    return attachments.length ? attachments : undefined;
   }
 }

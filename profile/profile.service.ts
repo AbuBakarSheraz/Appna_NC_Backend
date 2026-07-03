@@ -1,10 +1,10 @@
 import {
   BadRequestException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { BasicInfoDto } from './dto/basic-info.dto';
 import { AddressDto, OfficeInfoDto } from './dto/address.dto';
@@ -12,6 +12,8 @@ import { MedicalEducationDto } from './dto/medical-education.dto';
 import { MembershipDto, MEMBERSHIP_PRICING } from './dto/membership.dto';
 import { AdminService } from '../admin/admin.service';
 import { MailService } from '../src/mail/mail.service';
+import { SquareService } from '../payments/square.service';
+import { SquareTokenPaymentDto } from '../payments/square-payment.dto';
 
 // Base URL used to build public image URLs.
 // In production, set APP_URL or BACKEND_PUBLIC_URL to the public backend/CDN URL.
@@ -36,13 +38,12 @@ const STEPS = {
 @Injectable()
 export class ProfileService {
 private readonly logger = new Logger(ProfileService.name);
-private paypalAccessToken?: string;
-private paypalAccessTokenExpiresAt = 0;
 
 constructor(
   private readonly prisma: PrismaService,
   private readonly adminService: AdminService,
   private readonly mailService: MailService,
+  private readonly squareService: SquareService,
 ) {}
   // ─────────────────────────────────────────────────────────────────
   // STEP 1 — Basic Information
@@ -219,10 +220,13 @@ async selectMembership(userId: string, dto: MembershipDto) {
       expiresAt,
       isActive: false,
       startedAt: new Date(),
-      paymentProvider: isFreePlan ? null : 'PAYPAL',
+      paymentProvider: isFreePlan ? null : 'SQUARE',
       paymentStatus: isFreePlan ? 'NOT_REQUIRED' : 'PENDING',
       paypalOrderId: null,
       paypalCaptureId: null,
+      squarePaymentLinkId: null,
+      squareOrderId: null,
+      squarePaymentId: null,
       paidAt: null,
       paymentNotifiedAt: null,
     },
@@ -232,7 +236,7 @@ async selectMembership(userId: string, dto: MembershipDto) {
       price,
       expiresAt,
       isActive: false,
-      paymentProvider: isFreePlan ? null : 'PAYPAL',
+      paymentProvider: isFreePlan ? null : 'SQUARE',
       paymentStatus: isFreePlan ? 'NOT_REQUIRED' : 'PENDING',
     },
   });
@@ -264,7 +268,7 @@ async selectMembership(userId: string, dto: MembershipDto) {
   };
 }
 
-  async createPayPalOrder(userId: string) {
+  async createSquareMembershipCheckout(userId: string) {
     const membership = await this.prisma.membership.findUnique({
       where: { userId },
       include: {
@@ -292,56 +296,30 @@ async selectMembership(userId: string, dto: MembershipDto) {
 
     const frontendUrl = process.env.FRONTEND_URL ?? process.env.APP_URL ?? 'https://appnanc.org';
     const cleanFrontendUrl = frontendUrl.replace(/\/$/, '');
-    const order = await this.paypalRequest<{
-      id: string;
-      links?: Array<{ href: string; rel: string }>;
-    }>('/v2/checkout/orders', {
-      method: 'POST',
-      body: JSON.stringify({
-        intent: 'CAPTURE',
-        purchase_units: [
-          {
-            reference_id: membership.id,
-            custom_id: userId,
-            description: `${this.membershipLabel(membership.type)} APPNA NC Membership`,
-            amount: {
-              currency_code: 'USD',
-              value: membership.price.toFixed(2),
-            },
-          },
-        ],
-        application_context: {
-          brand_name: 'APPNA North Carolina',
-          shipping_preference: 'NO_SHIPPING',
-          user_action: 'PAY_NOW',
-          return_url: `${cleanFrontendUrl}/membership/payment/return`,
-          cancel_url: `${cleanFrontendUrl}/membership/payment/cancel`,
-        },
-      }),
+    const order = await this.squareService.createPaymentLink({
+      idempotencyKey: `membership-${membership.id}`,
+      name: `${this.membershipLabel(membership.type)} APPNA NC Membership`,
+      amount: membership.price,
+      referenceId: this.membershipReferenceId(membership.id),
+      redirectUrl: `${cleanFrontendUrl}/membership/payment/return`,
+      buyerEmail: membership.user.email,
+      paymentNote: `${this.membershipLabel(membership.type)} APPNA NC Membership`,
     });
-
-    const approveUrl = order.links?.find((link) => ['payer-action', 'approve', 'approval_url'].includes(link.rel))?.href
-      ?? order.links?.find((link) => link.rel !== 'self')?.href;
-
-    if (!approveUrl) {
-      throw new InternalServerErrorException('PayPal did not return an approval URL.');
-    }
 
     await this.prisma.membership.update({
       where: { userId },
       data: {
-        paypalOrderId: order.id,
-        paymentProvider: 'PAYPAL',
+        squarePaymentLinkId: order.paymentLinkId,
+        squareOrderId: order.orderId,
+        paymentProvider: 'SQUARE',
         paymentStatus: 'ORDER_CREATED',
       },
     });
 
-    return { orderId: order.id, approveUrl };
+    return { orderId: order.orderId, checkoutUrl: order.checkoutUrl, approveUrl: order.checkoutUrl };
   }
 
-  async capturePayPalOrder(userId: string, orderId: string) {
-    if (!orderId) throw new BadRequestException('Missing PayPal order token.');
-
+  async verifySquareMembershipPayment(userId: string) {
     const membership = await this.prisma.membership.findUnique({
       where: { userId },
       include: {
@@ -355,9 +333,7 @@ async selectMembership(userId: string, dto: MembershipDto) {
       },
     });
 
-    if (!membership || membership.paypalOrderId !== orderId) {
-      throw new BadRequestException('This PayPal order does not match your membership.');
-    }
+    if (!membership?.squareOrderId) throw new BadRequestException('This membership does not have a Square order.');
 
     if (membership.paidAt) {
       return {
@@ -366,27 +342,14 @@ async selectMembership(userId: string, dto: MembershipDto) {
       };
     }
 
-    const capture = await this.paypalRequest<any>(`/v2/checkout/orders/${orderId}/capture`, {
-      method: 'POST',
-      body: JSON.stringify({}),
+    await this.squareService.verifyOrderPaid(membership.squareOrderId, {
+      amount: membership.price,
+      referenceId: this.membershipReferenceId(membership.id),
     });
-
-    if (capture.status !== 'COMPLETED') {
-      throw new BadRequestException('PayPal payment was not completed.');
-    }
-
-    const purchaseUnit = capture.purchase_units?.[0];
-    const payment = purchaseUnit?.payments?.captures?.[0];
-    const paidAmount = Number(payment?.amount?.value ?? 0);
-
-    if (paidAmount !== membership.price) {
-      throw new BadRequestException('PayPal payment amount does not match the selected membership.');
-    }
 
     const updated = await this.prisma.membership.update({
       where: { userId },
       data: {
-        paypalCaptureId: payment?.id ?? null,
         paidAt: new Date(),
         paymentStatus: 'PAID',
       },
@@ -413,11 +376,12 @@ async selectMembership(userId: string, dto: MembershipDto) {
           memberEmail: updated.user.email,
           membershipType: this.membershipLabel(updated.type),
           amount: updated.price,
-          paypalOrderId: updated.paypalOrderId,
-          paypalCaptureId: updated.paypalCaptureId,
+          paymentProvider: updated.paymentProvider,
+          paymentOrderId: updated.squareOrderId ?? updated.paypalOrderId,
+          paymentTransactionId: updated.squarePaymentId ?? updated.paypalCaptureId,
         });
       } catch (err) {
-        this.logger.error('Failed to send PayPal payment emails', err);
+        this.logger.error('Failed to send Square payment emails', err);
       }
     }
 
@@ -426,6 +390,70 @@ async selectMembership(userId: string, dto: MembershipDto) {
       data: {
         paymentStatus: 'PAID',
         isActive: false,
+      },
+    };
+  }
+
+  async paySquareMembershipWithToken(userId: string, dto: SquareTokenPaymentDto) {
+    const membership = await this.prisma.membership.findUnique({
+      where: { userId },
+      include: {
+        user: {
+          select: {
+            email: true,
+            username: true,
+            basicInfo: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+
+    if (!membership) throw new BadRequestException('Please select a membership plan first.');
+    if (membership.isActive) throw new BadRequestException('Your membership is already active.');
+    if (membership.price <= 0) throw new BadRequestException('This membership does not require payment.');
+
+    if (membership.paidAt) {
+      return {
+        message: 'Payment already received. Awaiting admin confirmation.',
+        data: { paymentStatus: membership.paymentStatus, isActive: false },
+      };
+    }
+
+    const payment = await this.squareService.createPayment({
+      sourceId: dto.sourceId,
+      idempotencyKey: dto.idempotencyKey ?? crypto.randomUUID(),
+      amount: membership.price,
+      referenceId: this.membershipReferenceId(membership.id),
+      note: `${this.membershipLabel(membership.type)} APPNA NC Membership`,
+    });
+
+    const updated = await this.prisma.membership.update({
+      where: { userId },
+      data: {
+        squarePaymentId: payment.paymentId,
+        paidAt: new Date(),
+        paymentProvider: 'SQUARE',
+        paymentStatus: 'PAID',
+      },
+      include: {
+        user: {
+          select: {
+            email: true,
+            username: true,
+            basicInfo: { select: { firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+
+    await this.notifyMembershipPaymentReceived(updated);
+
+    return {
+      message: 'Payment received. Awaiting admin confirmation.',
+      data: {
+        paymentStatus: 'PAID',
+        isActive: false,
+        receiptUrl: payment.receiptUrl,
       },
     };
   }
@@ -524,79 +552,8 @@ async selectMembership(userId: string, dto: MembershipDto) {
     return `${publicBackendUrl()}/${imagePath.replace(/\\/g, '/')}`;
   }
 
-  private async paypalRequest<T>(path: string, init: RequestInit): Promise<T> {
-    const token = await this.getPayPalAccessToken();
-    const response = await fetch(`${this.paypalBaseUrl()}${path}`, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        ...(init.headers ?? {}),
-      },
-    });
-
-    const json = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      this.logger.error(`PayPal request failed: ${response.status}`, json);
-      throw new InternalServerErrorException('PayPal payment service is unavailable.');
-    }
-
-    return json as T;
-  }
-
-  private async getPayPalAccessToken(): Promise<string> {
-    if (this.paypalAccessToken && Date.now() < this.paypalAccessTokenExpiresAt) {
-      return this.paypalAccessToken;
-    }
-
-    const { clientId, clientSecret } = this.getPayPalCredentials();
-
-    const response = await fetch(`${this.paypalBaseUrl()}/v1/oauth2/token`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ grant_type: 'client_credentials' }),
-    });
-
-    const json = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      this.logger.error(`PayPal token request failed: ${response.status}`, json);
-      throw new InternalServerErrorException('PayPal credentials could not be verified.');
-    }
-
-    this.paypalAccessToken = json.access_token;
-    this.paypalAccessTokenExpiresAt = Date.now() + Math.max((json.expires_in ?? 300) - 60, 60) * 1000;
-
-    return this.paypalAccessToken!;
-  }
-
-  private getPayPalCredentials(): { clientId: string; clientSecret: string } {
-    const env = process.env.PAYPAL_ENV === 'live' ? 'LIVE' : 'SANDBOX';
-    const clientId = process.env.PAYPAL_CLIENT_ID ?? process.env[`PAYPAL_CLIENT_ID_${env}`];
-    const clientSecret = process.env.PAYPAL_CLIENT_SECRET ?? process.env[`PAYPAL_CLIENT_SECRET_${env}`];
-
-    if (!clientId || !clientSecret) {
-      const missing = [
-        !clientId ? `PAYPAL_CLIENT_ID or PAYPAL_CLIENT_ID_${env}` : null,
-        !clientSecret ? `PAYPAL_CLIENT_SECRET or PAYPAL_CLIENT_SECRET_${env}` : null,
-      ].filter(Boolean).join(' and ');
-
-      throw new InternalServerErrorException(
-        `PayPal credentials are not configured. Set ${missing}.`,
-      );
-    }
-
-    return { clientId, clientSecret };
-  }
-
-  private paypalBaseUrl(): string {
-    return process.env.PAYPAL_ENV === 'live'
-      ? 'https://api-m.paypal.com'
-      : 'https://api-m.sandbox.paypal.com';
+  private membershipReferenceId(membershipId: string) {
+    return `membership_${membershipId}`;
   }
 
   private memberName(user: {
@@ -620,5 +577,43 @@ async selectMembership(userId: string, dto: MembershipDto) {
     const now = new Date();
     const expiry = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
     return expiry;
+  }
+
+  private async notifyMembershipPaymentReceived(membership: {
+    userId: string;
+    type: string;
+    price: number;
+    paymentProvider?: string | null;
+    squareOrderId?: string | null;
+    paypalOrderId?: string | null;
+    squarePaymentId?: string | null;
+    paypalCaptureId?: string | null;
+    paymentNotifiedAt?: Date | null;
+    user: {
+      email: string;
+      username: string;
+      basicInfo?: { firstName: string; lastName: string } | null;
+    };
+  }) {
+    if (membership.paymentNotifiedAt) return;
+
+    await this.prisma.membership.update({
+      where: { userId: membership.userId },
+      data: { paymentNotifiedAt: new Date() },
+    });
+
+    try {
+      await this.mailService.sendMembershipPaymentReceived({
+        memberName: this.memberName(membership.user),
+        memberEmail: membership.user.email,
+        membershipType: this.membershipLabel(membership.type),
+        amount: membership.price,
+        paymentProvider: membership.paymentProvider,
+        paymentOrderId: membership.squareOrderId ?? membership.paypalOrderId,
+        paymentTransactionId: membership.squarePaymentId ?? membership.paypalCaptureId,
+      });
+    } catch (err) {
+      this.logger.error('Failed to send Square payment emails', err);
+    }
   }
 }

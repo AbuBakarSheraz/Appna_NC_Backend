@@ -1,8 +1,6 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -11,23 +9,25 @@ import * as crypto from 'crypto';
 import * as QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../src/mail/mail.service';
+import { SquareService } from '../payments/square.service';
+import { SquareEventTokenPaymentDto } from '../payments/square-payment.dto';
+import { buildTicketCardPng } from '../common/card-image';
 import {
-  CaptureEventPaymentDto,
   CreateEventDto,
   RegisterForEventDto,
   RegistrationFieldDto,
   UpdateEventDto,
+  VerifyEventPaymentDto,
 } from './dto/event.dto';
 
 @Injectable()
 export class EventsService {
   private readonly logger = new Logger(EventsService.name);
-  private paypalAccessToken?: string;
-  private paypalAccessTokenExpiresAt = 0;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailService: MailService,
+    private readonly squareService: SquareService,
   ) {}
 
   async listPublishedEvents() {
@@ -154,7 +154,7 @@ export class EventsService {
               { fullName: { contains: search } },
               { email: { contains: search } },
               { requestNumber: { contains: search } },
-              { ticket: { is: { ticketNumber: { contains: search } } } },
+              { tickets: { some: { ticketNumber: { contains: search } } } },
             ],
           }
         : {}),
@@ -169,7 +169,7 @@ export class EventsService {
           orderBy: { createdAt: 'desc' },
           include: {
             event: true,
-            ticket: true,
+            tickets: { orderBy: { ticketIndex: 'asc' } },
             user: {
               select: {
                 id: true,
@@ -213,8 +213,9 @@ export class EventsService {
     });
     if (!event) throw new NotFoundException('Event not found or not published');
 
+    const ticketQuantity = Math.max(1, Math.floor(Number(dto.ticketQuantity ?? 1)));
     this.validateRegistrationFields(event.registrationFields, dto.answers ?? {});
-    await this.assertCapacity(event.id, event.capacity);
+    await this.assertCapacity(event.id, event.capacity, ticketQuantity);
 
     const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
     const requestNumber = await this.nextNumber('REQ');
@@ -232,8 +233,9 @@ export class EventsService {
         organization: dto.organization,
         designation: dto.designation,
         answers: dto.answers ? (dto.answers as Prisma.InputJsonValue) : Prisma.JsonNull,
-        paymentAmount: event.ticketPrice,
-        paymentProvider: event.ticketPrice > 0 ? 'PAYPAL' : null,
+        paymentAmount: event.ticketPrice * ticketQuantity,
+        ticketQuantity,
+        paymentProvider: event.ticketPrice > 0 ? 'SQUARE' : null,
         paymentStatus: event.ticketPrice > 0 ? 'PENDING' : 'NOT_REQUIRED',
         approvalStatus: event.ticketPrice > 0 ? 'PENDING_PAYMENT' : 'AWAITING_ADMIN_CONFIRMATION',
       },
@@ -244,67 +246,109 @@ export class EventsService {
       return {
         requestId: request.id,
         requestNumber: request.requestNumber,
+        ticketQuantity: request.ticketQuantity,
+        totalAmount: request.paymentAmount,
         paymentRequired: false,
         message: 'Registration received. Awaiting admin approval.',
       };
     }
 
-    const order = await this.createPayPalOrder(event, request);
+    const order = await this.createSquareCheckout(event, request);
     await this.prisma.ticketRequest.update({
       where: { id: request.id },
-      data: { paypalOrderId: order.orderId, paymentStatus: 'ORDER_CREATED' },
+      data: {
+        squarePaymentLinkId: order.paymentLinkId,
+        squareOrderId: order.orderId,
+        paymentStatus: 'ORDER_CREATED',
+      },
     });
 
     return {
       requestId: request.id,
       requestNumber: request.requestNumber,
+      ticketQuantity: request.ticketQuantity,
+      totalAmount: request.paymentAmount,
       paymentRequired: true,
       orderId: order.orderId,
-      approveUrl: order.approveUrl,
+      checkoutUrl: order.checkoutUrl,
+      approveUrl: order.checkoutUrl,
     };
   }
 
-  async captureEventPayment(dto: CaptureEventPaymentDto) {
+  async verifyEventPayment(dto: VerifyEventPaymentDto) {
     const request = await this.prisma.ticketRequest.findUnique({
       where: { id: dto.requestId },
       include: { event: true },
     });
-    if (!request || request.paypalOrderId !== dto.orderId) {
-      throw new BadRequestException('This PayPal order does not match the ticket request.');
-    }
+    if (!request?.squareOrderId) throw new BadRequestException('This ticket request does not have a Square order.');
 
     if (request.paidAt) {
       return { message: 'Payment already received. Awaiting approval.', data: request };
     }
 
-    const capture = await this.paypalRequest<any>(`/v2/checkout/orders/${dto.orderId}/capture`, {
-      method: 'POST',
-      body: JSON.stringify({}),
+    await this.squareService.verifyOrderPaid(request.squareOrderId, {
+      amount: request.paymentAmount,
+      referenceId: this.eventReferenceId(request.id),
     });
-
-    await this.markPaidFromPayPalCapture(request.id, capture);
+    await this.markEventRequestPaid(request.id);
     await this.sendPaymentReceivedEmails(request.id);
 
     return { message: 'Payment received. Awaiting admin approval.' };
   }
 
-  async handlePayPalWebhook(headers: Record<string, string | string[] | undefined>, body: any) {
-    const verified = await this.verifyPayPalWebhook(headers, body);
-    if (!verified) throw new ForbiddenException('PayPal webhook signature could not be verified.');
+  async payEventWithSquareToken(dto: SquareEventTokenPaymentDto) {
+    const request = await this.prisma.ticketRequest.findUnique({
+      where: { id: dto.requestId },
+      include: { event: true },
+    });
+    if (!request) throw new NotFoundException('Ticket request not found');
+    if (request.paymentAmount <= 0) throw new BadRequestException('This ticket does not require payment.');
 
-    const eventType = body?.event_type;
-    const orderId =
-      body?.resource?.supplementary_data?.related_ids?.order_id ??
-      body?.resource?.id;
+    if (request.paidAt) {
+      return { message: 'Payment already received. Awaiting approval.', data: request };
+    }
 
+    const payment = await this.squareService.createPayment({
+      sourceId: dto.sourceId,
+      idempotencyKey: dto.idempotencyKey ?? crypto.randomUUID(),
+      amount: request.paymentAmount,
+      referenceId: this.eventReferenceId(request.id),
+      note: `${request.event.title} APPNA NC Event Ticket`,
+    });
+
+    await this.markEventRequestPaid(request.id, payment.paymentId);
+    await this.sendPaymentReceivedEmails(request.id);
+
+    return {
+      message: 'Payment received. Awaiting admin approval.',
+      data: {
+        requestId: request.id,
+        paymentStatus: 'PAID',
+        approvalStatus: 'AWAITING_ADMIN_CONFIRMATION',
+        receiptUrl: payment.receiptUrl,
+      },
+    };
+  }
+
+  async handleSquareWebhook(
+    headers: Record<string, string | string[] | undefined>,
+    body: any,
+    rawBody?: Buffer,
+  ) {
+    this.squareService.verifyWebhookSignature(headers, rawBody);
+    const payment = this.squareService.paymentFromWebhook(body);
+    const orderId = payment?.order_id;
     if (!orderId) return { received: true, ignored: true };
 
-    const request = await this.prisma.ticketRequest.findUnique({ where: { paypalOrderId: orderId } });
+    const request = await this.prisma.ticketRequest.findUnique({ where: { squareOrderId: orderId } });
     if (!request || request.paidAt) return { received: true, ignored: true };
 
-    if (eventType === 'CHECKOUT.ORDER.APPROVED' || eventType === 'PAYMENT.CAPTURE.COMPLETED') {
-      const order = await this.paypalRequest<any>(`/v2/checkout/orders/${request.paypalOrderId}`, { method: 'GET' });
-      await this.markPaidFromPayPalCapture(request.id, order);
+    if (body?.type === 'payment.created' || body?.type === 'payment.updated') {
+      const verified = this.squareService.assertPaymentMatches(payment, {
+        orderId,
+        amount: request.paymentAmount,
+      });
+      await this.markEventRequestPaid(request.id, verified.paymentId);
       await this.sendPaymentReceivedEmails(request.id);
     }
 
@@ -321,7 +365,7 @@ export class EventsService {
                 { fullName: { contains: search } },
                 { email: { contains: search } },
                 { requestNumber: { contains: search } },
-                { ticket: { is: { ticketNumber: { contains: search } } } },
+              { tickets: { some: { ticketNumber: { contains: search } } } },
               ],
             }
           : {}),
@@ -329,7 +373,7 @@ export class EventsService {
       orderBy: { createdAt: 'desc' },
       include: {
         event: true,
-        ticket: true,
+        tickets: { orderBy: { ticketIndex: 'asc' } },
         user: { select: { membership: { select: { isActive: true, type: true, paymentStatus: true } } } },
       },
     });
@@ -338,7 +382,7 @@ export class EventsService {
   async approveRequest(id: string, actorId: string, notes?: string) {
     const request = await this.prisma.ticketRequest.findUnique({
       where: { id },
-      include: { event: true, ticket: true },
+      include: { event: true, tickets: { orderBy: { ticketIndex: 'asc' } } },
     });
     if (!request) throw new NotFoundException('Ticket request not found');
     if (request.paymentStatus !== 'PAID' && request.paymentStatus !== 'NOT_REQUIRED') {
@@ -347,50 +391,46 @@ export class EventsService {
     if (request.approvalStatus === 'REJECTED' || request.approvalStatus === 'CANCELLED') {
       throw new BadRequestException('This request is not eligible for approval.');
     }
-    if (request.ticket) return request.ticket;
+    if (request.tickets.length) return request.tickets;
 
-    const ticketId = crypto.randomUUID();
-    const qrSecret = crypto.randomBytes(32).toString('base64url');
-    const ticketNumber = await this.nextNumber('TKT');
-    const registrationNumber = await this.nextNumber('REG');
-    const payload = this.signQrPayload({
-      ticketId,
-      eventId: request.eventId,
-      userId: request.userId ?? request.id,
-      validationToken: qrSecret,
-    });
-    const qrPayloadHash = this.hash(payload);
-    const qrCodeDataUrl = await QRCode.toDataURL(payload, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      scale: 8,
-    });
-    const ticketImageDataUrl = this.buildTicketSvgDataUrl({
-      ticketNumber,
-      registrationNumber,
-      attendeeName: request.fullName,
-      eventName: request.event.title,
-      eventDate: request.event.date,
-      startTime: request.event.startTime,
-      endTime: request.event.endTime,
-      venue: request.event.venue,
-      qrCodeDataUrl,
-    });
+    const ticketQuantity = Math.max(1, request.ticketQuantity ?? 1);
+    const generatedTickets = await Promise.all(
+      Array.from({ length: ticketQuantity }, async (_, index) => {
+        const ticketIndex = index + 1;
+        const ticketId = crypto.randomUUID();
+        const qrSecret = crypto.randomBytes(32).toString('base64url');
+        const ticketNumber = await this.nextNumber('TKT');
+        const registrationNumber = await this.nextNumber('REG');
+        const payload = this.signQrPayload({
+          ticketId,
+          eventId: request.eventId,
+          requestId: request.id,
+          ticketIndex: String(ticketIndex),
+          userId: request.userId ?? request.id,
+          validationToken: qrSecret,
+        });
+        const qrPayloadHash = this.hash(payload);
+        const qrCodeDataUrl = await QRCode.toDataURL(payload, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          scale: 8,
+        });
+        const ticketImageDataUrl = buildTicketCardPng({
+          ticketNumber,
+          registrationNumber,
+          ticketIndex,
+          ticketQuantity,
+          attendeeName: request.fullName,
+          eventName: request.event.title,
+          eventDate: request.event.date,
+          eventTime: `${request.event.startTime} - ${request.event.endTime}`,
+          venue: request.event.venue,
+          qrPayload: payload,
+        });
 
-    const ticket = await this.prisma.$transaction(async (tx) => {
-      await tx.ticketRequest.update({
-        where: { id },
-        data: {
-          approvalStatus: 'CONFIRMED',
-          adminNotes: notes,
-          reviewedById: actorId,
-          reviewedAt: new Date(),
-        },
-      });
-
-      return tx.ticket.create({
-        data: {
+        return {
           id: ticketId,
+          ticketIndex,
           ticketNumber,
           registrationNumber,
           requestId: id,
@@ -402,12 +442,37 @@ export class EventsService {
           qrSecret,
           qrCodeDataUrl,
           ticketImageDataUrl,
+        };
+      }),
+    );
+
+    const tickets = await this.prisma.$transaction(async (tx) => {
+      await tx.ticketRequest.update({
+        where: { id },
+        data: {
+          approvalStatus: 'CONFIRMED',
+          adminNotes: notes,
+          reviewedById: actorId,
+          reviewedAt: new Date(),
         },
+      });
+
+      await tx.ticket.createMany({
+        data: generatedTickets,
+      });
+
+      return tx.ticket.findMany({
+        where: { requestId: id },
+        orderBy: { ticketIndex: 'asc' },
         include: { event: true, request: true },
       });
     });
 
-    await this.audit(request.eventId, actorId, 'TICKET_REQUEST_APPROVED', { requestId: id, ticketNumber });
+    await this.audit(request.eventId, actorId, 'TICKET_REQUEST_APPROVED', {
+      requestId: id,
+      ticketQuantity,
+      ticketNumbers: tickets.map((ticket) => ticket.ticketNumber),
+    });
     await this.mailService.sendTicketApproved({
       attendeeName: request.fullName,
       attendeeEmail: request.email,
@@ -415,19 +480,27 @@ export class EventsService {
       eventDate: request.event.date,
       eventTime: `${request.event.startTime} - ${request.event.endTime}`,
       eventLocation: request.event.venue,
-      ticketNumber,
-      registrationNumber,
-      ticketImageDataUrl,
+      tickets: tickets.map((ticket) => ({
+        ticketNumber: ticket.ticketNumber,
+        registrationNumber: ticket.registrationNumber,
+        ticketImageDataUrl: ticket.ticketImageDataUrl,
+      })),
       ticketAccessUrl: this.frontendUrl(`/tickets`),
     });
     await this.createUserNotification(request.userId, {
       type: 'TICKET_APPROVED',
-      title: 'Your event ticket has been approved',
-      message: `${request.event.title} is confirmed. Ticket ${ticketNumber} is ready in your portal.`,
-      metadata: { requestId: id, ticketId: ticket.id, eventId: request.eventId, ticketNumber },
+      title: ticketQuantity > 1 ? 'Your event tickets have been approved' : 'Your event ticket has been approved',
+      message: `${request.event.title} is confirmed. ${ticketQuantity} ${ticketQuantity > 1 ? 'tickets are' : 'ticket is'} ready in your portal.`,
+      metadata: {
+        requestId: id,
+        eventId: request.eventId,
+        ticketQuantity,
+        ticketIds: tickets.map((ticket) => ticket.id),
+        ticketNumbers: tickets.map((ticket) => ticket.ticketNumber),
+      },
     });
 
-    return ticket;
+    return tickets;
   }
 
   async rejectRequest(id: string, actorId: string, notes?: string) {
@@ -475,10 +548,15 @@ export class EventsService {
         ],
       },
       orderBy: { createdAt: 'desc' },
-      include: { event: true, ticket: true },
+      include: { event: true, tickets: { orderBy: { ticketIndex: 'asc' } } },
     });
 
-    return requests.map((request) => this.toTicketPortalRecord(request));
+    return requests.flatMap((request) => {
+      if (request.tickets.length) {
+        return request.tickets.map((ticket) => this.toTicketPortalRecord(request, ticket));
+      }
+      return [this.toTicketPortalRecord(request)];
+    });
   }
 
   async validateTicket(qrPayload: string, actorId: string, ipAddress?: string, markUsed = true) {
@@ -595,29 +673,16 @@ export class EventsService {
     };
   }
 
-  private async markPaidFromPayPalCapture(requestId: string, capture: any) {
+  private async markEventRequestPaid(requestId: string, squarePaymentId?: string | null) {
     const request = await this.prisma.ticketRequest.findUnique({
       where: { id: requestId },
-      include: { event: true },
     });
     if (!request) throw new NotFoundException('Ticket request not found');
-
-    const captureStatus = capture?.status;
-    const purchaseUnit = capture?.purchase_units?.[0];
-    const payment = purchaseUnit?.payments?.captures?.[0] ?? capture?.resource;
-    const paidAmount = Number(payment?.amount?.value ?? purchaseUnit?.amount?.value ?? 0);
-
-    if (captureStatus && captureStatus !== 'COMPLETED') {
-      throw new BadRequestException('PayPal payment was not completed.');
-    }
-    if (paidAmount !== request.paymentAmount) {
-      throw new BadRequestException('PayPal payment amount does not match the ticket price.');
-    }
 
     return this.prisma.ticketRequest.update({
       where: { id: request.id },
       data: {
-        paypalCaptureId: payment?.id ?? request.paypalCaptureId,
+        squarePaymentId: squarePaymentId ?? request.squarePaymentId,
         paidAt: new Date(),
         paymentStatus: 'PAID',
         approvalStatus: 'AWAITING_ADMIN_CONFIRMATION',
@@ -625,125 +690,23 @@ export class EventsService {
     });
   }
 
-  private async createPayPalOrder(event: { id: string; slug?: string; title: string; ticketPrice: number }, request: { id: string }) {
+  private async createSquareCheckout(
+    event: { id: string; slug?: string; title: string; ticketPrice: number },
+    request: { id: string; email?: string | null; phone?: string | null; paymentAmount: number; ticketQuantity: number },
+  ) {
     const returnUrl = this.frontendUrl(`/events/payment/return?requestId=${request.id}`);
-    const cancelUrl = this.frontendUrl(`/events/${event.slug ?? event.id}`);
-    const order = await this.paypalRequest<{ id: string; links?: Array<{ href: string; rel: string }> }>('/v2/checkout/orders', {
-      method: 'POST',
-      body: JSON.stringify({
-        intent: 'CAPTURE',
-        purchase_units: [
-          {
-            reference_id: request.id,
-            custom_id: request.id,
-            description: `${event.title} APPNA NC Event Ticket`,
-            amount: { currency_code: 'USD', value: event.ticketPrice.toFixed(2) },
-          },
-        ],
-        application_context: {
-          brand_name: 'APPNA North Carolina',
-          shipping_preference: 'NO_SHIPPING',
-          user_action: 'PAY_NOW',
-          return_url: returnUrl,
-          cancel_url: cancelUrl,
-        },
-      }),
+    return this.squareService.createPaymentLink({
+      idempotencyKey: `event-${request.id}`,
+      name: request.ticketQuantity > 1
+        ? `${event.title} Event Tickets (${request.ticketQuantity})`
+        : `${event.title} Event Ticket`,
+      amount: request.paymentAmount,
+      referenceId: this.eventReferenceId(request.id),
+      redirectUrl: returnUrl,
+      buyerEmail: request.email ?? undefined,
+      buyerPhone: request.phone ?? undefined,
+      paymentNote: `${event.title} APPNA NC Event Ticket x ${request.ticketQuantity}`,
     });
-
-    const approveUrl = order.links?.find((link) => ['payer-action', 'approve', 'approval_url'].includes(link.rel))?.href
-      ?? order.links?.find((link) => link.rel !== 'self')?.href;
-    if (!approveUrl) throw new InternalServerErrorException('PayPal did not return an approval URL.');
-    return { orderId: order.id, approveUrl };
-  }
-
-  private async paypalRequest<T>(path: string, init: RequestInit): Promise<T> {
-    const token = await this.getPayPalAccessToken();
-    const response = await fetch(`${this.paypalBaseUrl()}${path}`, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        ...(init.headers ?? {}),
-      },
-    });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      this.logger.error(`PayPal request failed: ${response.status}`, json);
-      throw new InternalServerErrorException('PayPal payment service is unavailable.');
-    }
-    return json as T;
-  }
-
-  private async getPayPalAccessToken(): Promise<string> {
-    if (this.paypalAccessToken && Date.now() < this.paypalAccessTokenExpiresAt) return this.paypalAccessToken;
-
-    const { clientId, clientSecret } = this.getPayPalCredentials();
-
-    const response = await fetch(`${this.paypalBaseUrl()}/v1/oauth2/token`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ grant_type: 'client_credentials' }),
-    });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      this.logger.error(`PayPal token request failed: ${response.status}`, json);
-      throw new InternalServerErrorException('PayPal credentials could not be verified.');
-    }
-
-    this.paypalAccessToken = json.access_token;
-    this.paypalAccessTokenExpiresAt = Date.now() + Math.max((json.expires_in ?? 300) - 60, 60) * 1000;
-    return this.paypalAccessToken!;
-  }
-
-  private getPayPalCredentials(): { clientId: string; clientSecret: string } {
-    const env = process.env.PAYPAL_ENV === 'live' ? 'LIVE' : 'SANDBOX';
-    const clientId = process.env.PAYPAL_CLIENT_ID ?? process.env[`PAYPAL_CLIENT_ID_${env}`];
-    const clientSecret = process.env.PAYPAL_CLIENT_SECRET ?? process.env[`PAYPAL_CLIENT_SECRET_${env}`];
-
-    if (!clientId || !clientSecret) {
-      const missing = [
-        !clientId ? `PAYPAL_CLIENT_ID or PAYPAL_CLIENT_ID_${env}` : null,
-        !clientSecret ? `PAYPAL_CLIENT_SECRET or PAYPAL_CLIENT_SECRET_${env}` : null,
-      ].filter(Boolean).join(' and ');
-
-      throw new InternalServerErrorException(
-        `PayPal credentials are not configured. Set ${missing}.`,
-      );
-    }
-
-    return { clientId, clientSecret };
-  }
-
-  private paypalBaseUrl(): string {
-    return process.env.PAYPAL_ENV === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
-  }
-
-  private async verifyPayPalWebhook(headers: Record<string, string | string[] | undefined>, body: any) {
-    const webhookId = process.env.PAYPAL_WEBHOOK_ID;
-    if (!webhookId) return false;
-
-    const pick = (key: string) => {
-      const value = headers[key] ?? headers[key.toLowerCase()];
-      return Array.isArray(value) ? value[0] : value;
-    };
-
-    const response = await this.paypalRequest<{ verification_status: string }>('/v1/notifications/verify-webhook-signature', {
-      method: 'POST',
-      body: JSON.stringify({
-        auth_algo: pick('paypal-auth-algo'),
-        cert_url: pick('paypal-cert-url'),
-        transmission_id: pick('paypal-transmission-id'),
-        transmission_sig: pick('paypal-transmission-sig'),
-        transmission_time: pick('paypal-transmission-time'),
-        webhook_id: webhookId,
-        webhook_event: body,
-      }),
-    });
-
-    return response.verification_status === 'SUCCESS';
   }
 
   private normalizeFields(fields?: RegistrationFieldDto[]) {
@@ -773,15 +736,24 @@ export class EventsService {
     }
   }
 
-  private async assertCapacity(eventId: string, capacity: number) {
-    const count = await this.prisma.ticketRequest.count({
+  private async assertCapacity(eventId: string, capacity: number, requestedQuantity = 1) {
+    const reserved = await this.prisma.ticketRequest.aggregate({
       where: {
         eventId,
         approvalStatus: { not: 'REJECTED' },
         paymentStatus: { in: ['ORDER_CREATED', 'PAID', 'NOT_REQUIRED'] },
       },
+      _sum: { ticketQuantity: true },
     });
-    if (count >= capacity) throw new BadRequestException('This event is sold out.');
+    const reservedQuantity = reserved._sum.ticketQuantity ?? 0;
+    if (reservedQuantity + requestedQuantity > capacity) {
+      const remaining = Math.max(0, capacity - reservedQuantity);
+      throw new BadRequestException(
+        remaining
+          ? `Only ${remaining} ticket${remaining === 1 ? '' : 's'} remaining for this event.`
+          : 'This event is sold out.',
+      );
+    }
   }
 
   private async sendPaymentReceivedEmails(requestId: string) {
@@ -792,8 +764,9 @@ export class EventsService {
       attendeeEmail: request.email,
       eventName: request.event.title,
       amount: request.paymentAmount,
-      paypalOrderId: request.paypalOrderId,
-      paypalCaptureId: request.paypalCaptureId,
+      paymentProvider: request.paymentProvider,
+      paymentOrderId: request.squareOrderId ?? request.paypalOrderId,
+      paymentTransactionId: request.squarePaymentId ?? request.paypalCaptureId,
       reviewUrl: this.frontendUrl('/admin/events'),
     });
     await Promise.all([
@@ -812,10 +785,14 @@ export class EventsService {
           eventId: request.eventId,
           email: request.email,
           amount: request.paymentAmount,
-          transactionId: request.paypalCaptureId ?? request.paypalOrderId,
+          transactionId: request.squarePaymentId ?? request.squareOrderId ?? request.paypalCaptureId ?? request.paypalOrderId,
         },
       }),
     ]);
+  }
+
+  private eventReferenceId(requestId: string) {
+    return `ticket_${requestId}`;
   }
 
   private signQrPayload(payload: Record<string, string>) {
@@ -849,37 +826,6 @@ export class EventsService {
     return crypto.createHash('sha256').update(value).digest('hex');
   }
 
-  private buildTicketSvgDataUrl(input: {
-    ticketNumber: string;
-    registrationNumber: string;
-    attendeeName: string;
-    eventName: string;
-    eventDate: Date;
-    startTime: string;
-    endTime: string;
-    venue: string;
-    qrCodeDataUrl: string;
-  }) {
-    const eventDate = input.eventDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680">
-      <rect width="1200" height="680" rx="34" fill="#f8fafc"/>
-      <rect x="36" y="36" width="1128" height="608" rx="28" fill="#ffffff" stroke="#e5e7eb" stroke-width="2"/>
-      <rect x="36" y="36" width="1128" height="118" rx="28" fill="#7a1f3d"/>
-      <text x="78" y="96" font-family="Arial" font-size="34" font-weight="700" fill="#ffffff">APPNA NC Event Ticket</text>
-      <text x="78" y="130" font-family="Arial" font-size="18" fill="#fce7f3">${this.xml(input.ticketNumber)}</text>
-      <image href="${input.qrCodeDataUrl}" x="820" y="210" width="260" height="260"/>
-      <text x="78" y="235" font-family="Arial" font-size="44" font-weight="700" fill="#111827">${this.xml(input.eventName)}</text>
-      <text x="78" y="298" font-family="Arial" font-size="28" fill="#374151">${this.xml(input.attendeeName)}</text>
-      <text x="78" y="374" font-family="Arial" font-size="22" font-weight="700" fill="#7a1f3d">Date and Time</text>
-      <text x="78" y="410" font-family="Arial" font-size="22" fill="#374151">${this.xml(eventDate)} | ${this.xml(input.startTime)} - ${this.xml(input.endTime)}</text>
-      <text x="78" y="480" font-family="Arial" font-size="22" font-weight="700" fill="#7a1f3d">Location</text>
-      <text x="78" y="516" font-family="Arial" font-size="22" fill="#374151">${this.xml(input.venue)}</text>
-      <text x="78" y="586" font-family="Arial" font-size="20" fill="#6b7280">Registration: ${this.xml(input.registrationNumber)}</text>
-      <text x="820" y="510" font-family="Arial" font-size="18" fill="#6b7280">Scan at check-in</text>
-    </svg>`;
-    return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
-  }
-
   private validationResponse(ticket: any, status: string, valid: boolean) {
     return {
       valid,
@@ -894,13 +840,14 @@ export class EventsService {
     };
   }
 
-  private toTicketPortalRecord(request: any) {
-    const ticket = request.ticket;
-    const status = this.portalStatus(request);
+  private toTicketPortalRecord(request: any, ticket?: any) {
+    const status = this.portalStatus(request, ticket);
     return {
       id: ticket?.id ?? request.id,
       requestId: request.id,
       requestNumber: request.requestNumber,
+      ticketQuantity: request.ticketQuantity ?? 1,
+      ticketIndex: ticket?.ticketIndex ?? null,
       ticketNumber: ticket?.ticketNumber ?? request.requestNumber,
       registrationNumber: ticket?.registrationNumber ?? null,
       status,
@@ -919,10 +866,10 @@ export class EventsService {
     };
   }
 
-  private portalStatus(request: any) {
+  private portalStatus(request: any, ticket?: any) {
     if (request.approvalStatus === 'CONFIRMED') {
-      if (request.ticket?.status === 'USED') return 'Checked In';
-      if (request.ticket?.status === 'EXPIRED') return 'Expired';
+      if (ticket?.status === 'USED') return 'Checked In';
+      if (ticket?.status === 'EXPIRED') return 'Expired';
       return 'Confirmed';
     }
     if (request.approvalStatus === 'REJECTED') return 'Rejected';

@@ -21,6 +21,7 @@ import { BasicInfoDto } from './dto/basic-info.dto';
 import { AddressDto, OfficeInfoDto } from './dto/address.dto';
 import { MedicalEducationDto } from './dto/medical-education.dto';
 import { MembershipDto } from './dto/membership.dto';
+import { SquareTokenPaymentDto } from '../payments/square-payment.dto';
 
 // ─── Multer storage config ────────────────────────────────────────
 // Saves uploaded profile photos to /uploads/profiles/<timestamp>.<ext>
@@ -150,13 +151,28 @@ export class ProfileController {
   // Production recommendation: trigger this from your Stripe webhook
   // handler instead of the frontend — it's more tamper-proof.
   // ──────────────────────────────────────────────────────────────
+  @Post('membership/square/create-checkout')
+  createSquareMembershipCheckout(@Req() req) {
+    return this.service.createSquareMembershipCheckout(req.user.userId);
+  }
+
+  @Post('membership/square/verify')
+  verifySquareMembershipPayment(@Req() req) {
+    return this.service.verifySquareMembershipPayment(req.user.userId);
+  }
+
+  @Post('membership/square/pay')
+  paySquareMembership(@Req() req, @Body() dto: SquareTokenPaymentDto) {
+    return this.service.paySquareMembershipWithToken(req.user.userId, dto);
+  }
+
   @Post('membership/paypal/create-order')
-  createPayPalOrder(@Req() req) {
-    return this.service.createPayPalOrder(req.user.userId);
+  legacyCreatePayPalOrder(@Req() req) {
+    return this.service.createSquareMembershipCheckout(req.user.userId);
   }
 
   @Post('membership/paypal/capture')
-  capturePayPalOrder(@Req() req, @Body('orderId') orderId: string) {
-    return this.service.capturePayPalOrder(req.user.userId, orderId);
+  legacyCapturePayPalOrder(@Req() req) {
+    return this.service.verifySquareMembershipPayment(req.user.userId);
   }
 }

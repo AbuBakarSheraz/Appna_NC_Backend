@@ -184,13 +184,15 @@ export class RegisterForEventDto {
   @IsObject()
   @IsOptional()
   answers?: Record<string, unknown>;
+
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  @Type(() => Number)
+  ticketQuantity?: number;
 }
 
-export class CaptureEventPaymentDto {
-  @IsString()
-  @IsNotEmpty()
-  orderId: string;
-
+export class VerifyEventPaymentDto {
   @IsString()
   @IsNotEmpty()
   requestId: string;
