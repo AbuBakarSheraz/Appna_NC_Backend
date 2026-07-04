@@ -91,12 +91,13 @@ export class SquareService {
         },
         pre_populated_data: {
           buyer_email: input.buyerEmail,
-          buyer_phone_number: input.buyerPhone || undefined,
+          // buyer_phone_number: this.toE164UsPhone(input.buyerPhone),
         },
         payment_note: input.paymentNote,
       }),
     });
 
+    
     const link = response.payment_link;
     if (!link?.url || !link.order_id || !link.id) {
       this.logger.error('Square did not return a usable payment link', response);
@@ -109,6 +110,14 @@ export class SquareService {
       checkoutUrl: link.url,
     };
   }
+
+  private toE164UsPhone(rawPhone?: string | null): string | undefined {
+  if (!rawPhone) return undefined;
+  const digits = rawPhone.replace(/\D/g, '');
+  const tenDigits = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  if (tenDigits.length !== 10) return undefined;
+  return `+1${tenDigits}`;
+}
 
   async verifyOrderPaid(orderId: string, expected: { amount: number; referenceId: string }) {
     if (!orderId) throw new BadRequestException('Missing Square order ID.');
