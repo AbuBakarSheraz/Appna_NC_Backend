@@ -56,6 +56,7 @@ const FONT: Record<string, string[]> = {
   '#': ['01010', '01010', '11111', '01010', '11111', '01010', '01010'],
   '@': ['01110', '10001', '10111', '10101', '10111', '10000', '01110'],
   '?': ['01110', '10001', '00001', '00010', '00100', '00000', '00100'],
+  ',': ['00000', '00000', '00000', '00000', '00000', '00100', '01000'],
 };
 
 class PngCard {
@@ -138,9 +139,9 @@ class PngCard {
     return this.safeText(text).length * 6 * scale;
   }
 
-  private safeText(text: string) {
-    return String(text ?? '').toUpperCase().replace(/[^A-Z0-9 .:/#@&-]/g, '?');
-  }
+ private safeText(text: string) {
+  return String(text ?? '').toUpperCase().replace(/[^A-Z0-9 ,.:/#@&-]/g, '?');
+}
 
   private toPngBuffer() {
     const raw = Buffer.alloc((this.width * 4 + 1) * this.height);
