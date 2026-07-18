@@ -42,6 +42,54 @@ export class MailService implements OnModuleInit {
     return data;
   }
 
+
+  async sendAlreadyMemberRequestSubmitted(dto: {
+    memberName: string;
+    memberEmail: string;
+    membershipType: string;
+  }): Promise<void> {
+    const submittedAt = this.formatEasternTime(new Date());
+
+    await Promise.all([
+      this.send({
+        from: `APPNA NC Membership <${this.extractEmail(SENDER)}>`,
+        to: ORG_INBOX,
+        replyTo: dto.memberEmail,
+        subject: `Existing member verification needed - ${dto.memberName}`,
+        html: this.wrapEmail({
+          title: 'Existing Member Request',
+          subtitle: submittedAt,
+          body: `
+            <h2>New existing-member registration awaiting verification</h2>
+            <p><strong>${dto.memberName}</strong> registered as an existing <strong>${dto.membershipType}</strong> member. No payment was collected — please verify their prior membership before confirming.</p>
+            <div class="highlight">
+              <strong>Member:</strong> ${dto.memberName}<br/>
+              <strong>Email:</strong> <a href="mailto:${dto.memberEmail}">${dto.memberEmail}</a><br/>
+              <strong>Claimed Plan:</strong> ${dto.membershipType}
+            </div>
+            <p>Once verified, press <strong>Confirm Payment</strong> in the admin panel to activate their membership and issue their card.</p>
+          `,
+        }),
+      }),
+      this.send({
+        from: `APPNA NC Membership <${this.extractEmail(SENDER)}>`,
+        to: dto.memberEmail,
+        subject: 'We received your APPNA NC membership request',
+        html: this.wrapEmail({
+          title: 'Request Received',
+          subtitle: 'APPNA North Carolina',
+          body: `
+            <h2>Hi ${dto.memberName},</h2>
+            <p>Thank you. We received your request to link your existing <strong>${dto.membershipType}</strong> membership to the new member portal.</p>
+            <div class="highlight">An APPNA NC admin will verify your membership and send your confirmation within <strong>24 hours</strong>. No payment is required.</div>
+            <p>Your login uses the email and password you created just now. You will receive an activation email as soon as your membership is confirmed.</p>
+            <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
+          `,
+        }),
+      }),
+    ]);
+  }
+  
   async sendContactMails(dto: ContactFormDto): Promise<void> {
     try {
       await Promise.all([
