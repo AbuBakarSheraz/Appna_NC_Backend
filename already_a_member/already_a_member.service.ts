@@ -3,6 +3,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../src/mail/mail.service';
 import { AlreadyAMemberDto } from './dto/already-a-member.dto';
+import { MEMBERSHIP_PRICING } from '../profile/dto/membership.dto'; // ← reuse existing pricing map
 
 function annualExpiry(): Date {
   const now = new Date();
@@ -28,6 +29,7 @@ export class AlreadyAMemberService {
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const expiresAt = dto.membershipType === 'LIFETIME' ? null : annualExpiry();
+    const price = MEMBERSHIP_PRICING[dto.membershipType]; // 50 for ANNUAL, 500 for LIFETIME
 
     const user = await this.prisma.$transaction(async (tx) => {
       const created = await tx.user.create({
@@ -83,7 +85,7 @@ export class AlreadyAMemberService {
         data: {
           userId: created.id,
           type: dto.membershipType,
-          price: 0,
+          price,
           expiresAt,
           isActive: false, // admin flips this after verifying existing membership
           startedAt: new Date(),
