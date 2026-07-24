@@ -90,6 +90,90 @@ export class MailService implements OnModuleInit {
     ]);
   }
   
+  async sendSponsorshipPaymentReceived(dto: {
+    businessName: string;
+    contactName: string;
+    contactEmail: string;
+    contactPhone: string;
+    tier: string;
+    amount: number;
+    transactionId: string;
+    receiptDataUrl: string;
+  }): Promise<void> {
+    const submittedAt = this.formatEasternTime(new Date());
+
+    await Promise.all([
+      this.send({
+        from: `APPNA NC Sponsorship <${this.extractEmail(SENDER)}>`,
+        to: ORG_INBOX,
+        replyTo: dto.contactEmail,
+        subject: `Sponsorship payment received - ${dto.businessName} (${dto.tier})`,
+        html: this.wrapEmail({
+          title: 'Sponsorship Payment Received',
+          subtitle: submittedAt,
+          body: `
+            <h2>New sponsorship payment awaiting confirmation</h2>
+            <div class="highlight">
+              <strong>Business:</strong> ${dto.businessName}<br/>
+              <strong>Contact:</strong> ${dto.contactName}<br/>
+              <strong>Email:</strong> <a href="mailto:${dto.contactEmail}">${dto.contactEmail}</a><br/>
+              <strong>Phone:</strong> ${dto.contactPhone}<br/>
+              <strong>Tier:</strong> ${dto.tier}<br/>
+              <strong>Amount:</strong> $${dto.amount.toLocaleString()} USD<br/>
+              <strong>Transaction ID:</strong> ${dto.transactionId}
+            </div>
+            <p>Please verify the payment in Square and confirm this sponsorship in the admin panel.</p>
+          `,
+        }),
+        attachments: this.attachmentsFromDataUrls([
+          { dataUrl: dto.receiptDataUrl, filename: `sponsorship-receipt-${dto.businessName}.png` },
+        ]),
+      }),
+      this.send({
+        from: `APPNA NC Sponsorship <${this.extractEmail(SENDER)}>`,
+        to: dto.contactEmail,
+        subject: 'We received your APPNA NC sponsorship payment',
+        html: this.wrapEmail({
+          title: 'Payment Received',
+          subtitle: 'APPNA North Carolina',
+          body: `
+            <h2>Hi ${dto.contactName},</h2>
+            <p>Thank you for sponsoring APPNA NC as a <strong>${dto.tier}</strong> sponsor. We received your payment of <strong>$${dto.amount.toLocaleString()}</strong>.</p>
+            <div class="highlight">Your transaction receipt is attached. An APPNA NC admin will confirm your sponsorship and follow up within <strong>24–48 hours</strong>.</div>
+            <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
+          `,
+        }),
+        attachments: this.attachmentsFromDataUrls([
+          { dataUrl: dto.receiptDataUrl, filename: 'appna-nc-sponsorship-receipt.png' },
+        ]),
+      }),
+    ]);
+  }
+
+  async sendSponsorshipConfirmed(dto: {
+    businessName: string;
+    contactName: string;
+    contactEmail: string;
+    tier: string;
+    amount: number;
+  }): Promise<void> {
+    await this.send({
+      from: `APPNA NC Sponsorship <${this.extractEmail(SENDER)}>`,
+      to: dto.contactEmail,
+      subject: 'Your APPNA NC sponsorship is confirmed',
+      html: this.wrapEmail({
+        title: 'Sponsorship Confirmed',
+        subtitle: 'APPNA North Carolina',
+        body: `
+          <h2>Hi ${dto.contactName},</h2>
+          <p>Thank you — your <strong>${dto.tier}</strong> sponsorship ($${dto.amount.toLocaleString()}) for <strong>${dto.businessName}</strong> has been confirmed.</p>
+          <div class="highlight">Our team will reach out shortly with next steps for your sponsorship benefits (stage time, booth space, brochure placement, etc.).</div>
+          <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
+        `,
+      }),
+    });
+  }
+
   async sendContactMails(dto: ContactFormDto): Promise<void> {
     try {
       await Promise.all([

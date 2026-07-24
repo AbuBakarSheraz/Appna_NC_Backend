@@ -218,6 +218,42 @@ export function buildMembershipCardPng(input: {
   return card.toDataUrl();
 }
 
+export function buildSponsorshipReceiptPng(input: {
+  businessName: string;
+  tier: string;
+  amount: number;
+  sponsorshipId: string;
+  transactionId: string;
+  paidAt: Date;
+}) {
+  const card = new PngCard(1012, 638, SOFT);
+  card.fillRect(34, 34, 944, 570, WHITE);
+  card.strokeRect(34, 34, 944, 570, BORDER, 2);
+  card.fillRect(34, 34, 944, 132, MAROON);
+
+  card.drawFittedText('APPNA NORTH CAROLINA', 74, 78, 7, WHITE, 880);
+  card.drawFittedText('SPONSORSHIP RECEIPT', 74, 122, 4, WHITE, 500);
+
+  card.drawText('BUSINESS', 74, 232, 4, MAROON, 260);
+  card.drawFittedText(input.businessName, 74, 270, 8, INK, 760);
+
+  card.drawText('TIER', 74, 370, 4, MAROON, 200);
+  card.drawFittedText(input.tier, 74, 408, 6, INK, 400);
+
+  card.drawText('AMOUNT', 650, 370, 4, MAROON, 240);
+  card.drawFittedText(`${input.amount.toLocaleString()} USD`, 650, 408, 5, INK, 300);
+
+  card.drawText('SPONSORSHIP ID', 74, 480, 4, MAROON, 300);
+  card.drawFittedText(input.sponsorshipId.slice(0, 24), 74, 514, 4, MUTED, 520);
+
+  card.drawText('TRANSACTION ID', 650, 480, 4, MAROON, 260);
+  card.drawFittedText(input.transactionId.slice(0, 24), 650, 514, 4, MUTED, 320);
+
+  card.drawFittedText(`PAID ${formatDate(input.paidAt)}`, 74, 570, 4, MUTED, 460);
+
+  return card.toDataUrl();
+}
+
 export function dataUrlAttachment(dataUrl: string, filename: string) {
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return undefined;

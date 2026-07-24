@@ -4,9 +4,10 @@ import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { MailModule } from '../src/mail/mail.module';
+import { SponsorshipModule } from '../sponsorship/sponsorship.module';
 
 @Module({
-  imports: [PrismaModule, MailModule],
+  imports: [PrismaModule, MailModule, SponsorshipModule],
   controllers: [AdminController],
   providers: [AdminService],
   exports: [AdminService], // ⭐ REQUIRED

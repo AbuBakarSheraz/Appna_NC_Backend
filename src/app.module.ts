@@ -9,6 +9,7 @@ import { AdminModule } from '../admin/admin.module';
 import { MailModule } from './mail/mail.module';
 import { EventsModule } from '../events/events.module';
 import { AlreadyAMemberModule } from 'already_a_member/already_a_member.module';
+import { SponsorshipModule } from '../sponsorship/sponsorship.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AlreadyAMemberModule } from 'already_a_member/already_a_member.module';
     MailModule,
     EventsModule,
      AlreadyAMemberModule,
+     SponsorshipModule,
   ],
   controllers: [AppController],
   providers: [AppService],
