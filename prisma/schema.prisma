@@ -427,3 +427,27 @@ model Sponsorship {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 }
+
+enum VendorTier {
+  PLATINUM
+  GOLD
+}
+
+model Vendorship {
+  id              String          @id @default(cuid())
+  businessName    String
+  businessType    String
+  contactName     String
+  contactEmail    String
+  contactPhone    String
+  tier            SponsorshipTier
+  amount          Int
+  paymentProvider String?         @default("SQUARE")
+  paymentStatus   String          @default("PENDING") // PENDING | PAID | CONFIRMED | FAILED
+  squarePaymentId String?
+  paidAt          DateTime?
+  confirmedAt     DateTime?
+  notes           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}

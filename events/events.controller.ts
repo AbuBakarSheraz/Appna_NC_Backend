@@ -2,7 +2,7 @@ import { Body, Controller, Get, Headers, Param, Post, Query, Req, UseGuards } fr
 import { JwtAuthGuard } from '../common/guards/jwt.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
 import { EventsService } from './events.service';
-import { RegisterForEventDto, ValidateTicketDto, VerifyEventPaymentDto } from './dto/event.dto';
+import { CreateCashTicketDto, RegisterForEventDto, ValidateTicketDto, VerifyEventPaymentDto } from './dto/event.dto';
 import { SquareEventTokenPaymentDto } from '../payments/square-payment.dto';
 
 @Controller('events')
@@ -125,6 +125,11 @@ export class AdminEventsController {
   @Post('requests/:id/reject')
   reject(@Param('id') id: string, @Req() req, @Body('notes') notes?: string) {
     return this.eventsService.rejectRequest(id, req.user.userId, notes);
+  }
+
+  @Post(':eventId/cash-tickets')
+  createCashTicket(@Param('eventId') eventId: string, @Req() req, @Body() dto: CreateCashTicketDto) {
+    return this.eventsService.createCashTicket(eventId, dto, req.user.userId);
   }
 
   @Post('tickets/validate')

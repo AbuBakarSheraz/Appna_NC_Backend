@@ -14,6 +14,7 @@ import { SquareEventTokenPaymentDto } from '../payments/square-payment.dto';
 import { buildTicketCardPng } from '../common/card-image';
 import {
   CreateEventDto,
+  CreateCashTicketDto,
   RegisterForEventDto,
   RegistrationFieldDto,
   UpdateEventDto,
@@ -273,6 +274,66 @@ export class EventsService {
       checkoutUrl: order.checkoutUrl,
       approveUrl: order.checkoutUrl,
     };
+  }
+
+  /**
+   * Records a payment already received by an administrator and immediately
+   * issues a normal confirmed ticket.  Keeping this as a TicketRequest means
+   * it appears in the same admin list, attendee portal, reporting, and QR
+   * check-in flow as tickets purchased online.
+   */
+  async createCashTicket(eventId: string, dto: CreateCashTicketDto, actorId: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: {
+        id: true,
+        title: true,
+        ticketPrice: true,
+        capacity: true,
+        status: true,
+        registrationFields: true,
+      },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+    if (event.status === 'CANCELLED') throw new BadRequestException('Tickets cannot be created for a cancelled event.');
+
+    const ticketQuantity = Math.max(1, Math.floor(Number(dto.ticketQuantity ?? 1)));
+    this.validateRegistrationFields(event.registrationFields, dto.answers ?? {});
+    await this.assertCapacity(event.id, event.capacity, ticketQuantity);
+
+    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const request = await this.prisma.ticketRequest.create({
+      data: {
+        requestNumber: await this.nextNumber('REQ'),
+        eventId: event.id,
+        userId: user?.id,
+        fullName: dto.fullName,
+        email: dto.email,
+        phone: dto.phone,
+        cnic: dto.cnic,
+        city: dto.city,
+        organization: dto.organization,
+        designation: dto.designation,
+        answers: dto.answers ? (dto.answers as Prisma.InputJsonValue) : Prisma.JsonNull,
+        paymentAmount: event.ticketPrice * ticketQuantity,
+        ticketQuantity,
+        paymentProvider: 'CASH',
+        paymentStatus: 'PAID',
+        paidAt: new Date(),
+        approvalStatus: 'AWAITING_ADMIN_CONFIRMATION',
+        adminNotes: 'Cash payment recorded and ticket issued by admin.',
+      },
+    });
+
+    await this.audit(event.id, actorId, 'CASH_TICKET_RECORDED', {
+      requestId: request.id,
+      requestNumber: request.requestNumber,
+      ticketQuantity,
+      amount: request.paymentAmount,
+    });
+
+    const tickets = await this.approveRequest(request.id, actorId, 'Cash payment recorded and ticket issued by admin.');
+    return { request, tickets };
   }
 
   async verifyEventPayment(dto: VerifyEventPaymentDto) {

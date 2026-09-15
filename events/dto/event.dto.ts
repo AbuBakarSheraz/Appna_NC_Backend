@@ -192,6 +192,13 @@ export class RegisterForEventDto {
   ticketQuantity?: number;
 }
 
+/**
+ * An administrator records this only after collecting the event price in cash.
+ * It deliberately mirrors the public registration fields so cash tickets use
+ * the same ticket request and QR validation flow as online registrations.
+ */
+export class CreateCashTicketDto extends RegisterForEventDto {}
+
 export class VerifyEventPaymentDto {
   @IsString()
   @IsNotEmpty()
