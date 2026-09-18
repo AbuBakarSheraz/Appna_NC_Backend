@@ -146,7 +146,12 @@ export class EventsService {
     });
   }
 
-  async getAdminEvent(id: string, status?: string, search?: string) {
+  async getAdminEvent(id: string, status?: string, search?: string, page?: number, limit?: number) {
+    const pageNumber = typeof page === 'number' && Number.isFinite(page) ? page : undefined;
+    const limitNumber = typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined;
+    const paginationRequested = pageNumber !== undefined || limitNumber !== undefined;
+    const safePage = pageNumber !== undefined && pageNumber > 0 ? Math.floor(pageNumber) : 1;
+    const safeLimit = limitNumber !== undefined ? Math.min(Math.max(Math.floor(limitNumber), 1), 100) : 20;
     const requestWhere: Prisma.TicketRequestWhereInput = {
       ...(status && status !== 'ALL' ? { approvalStatus: status as TicketRequestStatus } : {}),
       ...(search
@@ -168,6 +173,7 @@ export class EventsService {
         ticketRequests: {
           where: requestWhere,
           orderBy: { createdAt: 'desc' },
+          ...(paginationRequested ? { skip: (safePage - 1) * safeLimit, take: safeLimit } : {}),
           include: {
             event: true,
             tickets: { orderBy: { ticketIndex: 'asc' } },
@@ -197,6 +203,12 @@ export class EventsService {
         acc[row.approvalStatus] = row._count._all;
         return acc;
       }, {}),
+      requestPagination: {
+        page: safePage,
+        limit: safeLimit,
+        total: event._count.ticketRequests,
+        totalPages: Math.max(1, Math.ceil(event._count.ticketRequests / safeLimit)),
+      },
     };
   }
 
@@ -416,9 +428,14 @@ export class EventsService {
     return { received: true };
   }
 
-  async listRequests(status?: string, search?: string) {
-    return this.prisma.ticketRequest.findMany({
-      where: {
+  async listRequests(status?: string, search?: string, eventId?: string, page?: number, limit?: number) {
+    const pageNumber = typeof page === 'number' && Number.isFinite(page) ? page : undefined;
+    const limitNumber = typeof limit === 'number' && Number.isFinite(limit) ? limit : undefined;
+    const paginationRequested = pageNumber !== undefined || limitNumber !== undefined;
+    const safePage = pageNumber !== undefined && pageNumber > 0 ? Math.floor(pageNumber) : 1;
+    const safeLimit = limitNumber !== undefined ? Math.min(Math.max(Math.floor(limitNumber), 1), 100) : 20;
+    const where: Prisma.TicketRequestWhereInput = {
+      ...(eventId ? { eventId } : {}),
         ...(status && status !== 'ALL' ? { approvalStatus: status as TicketRequestStatus } : {}),
         ...(search
           ? {
@@ -430,14 +447,32 @@ export class EventsService {
               ],
             }
           : {}),
-      },
+    };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.ticketRequest.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
+      ...(paginationRequested ? { skip: (safePage - 1) * safeLimit, take: safeLimit } : {}),
       include: {
         event: true,
         tickets: { orderBy: { ticketIndex: 'asc' } },
         user: { select: { membership: { select: { isActive: true, type: true, paymentStatus: true } } } },
       },
-    });
+      }),
+      this.prisma.ticketRequest.count({ where }),
+    ]);
+
+    // Keep the original array response for callers that have not opted into pagination.
+    if (!paginationRequested) return items;
+
+    return {
+      items,
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+    };
   }
 
   async approveRequest(id: string, actorId: string, notes?: string) {
@@ -546,7 +581,6 @@ export class EventsService {
         registrationNumber: ticket.registrationNumber,
         ticketImageDataUrl: ticket.ticketImageDataUrl,
       })),
-      ticketAccessUrl: this.frontendUrl(`/tickets`),
     });
     await this.createUserNotification(request.userId, {
       type: 'TICKET_APPROVED',
@@ -592,6 +626,55 @@ export class EventsService {
       metadata: { requestId: id, eventId: request.eventId },
     });
     return request;
+  }
+
+  async cancelRequest(id: string, actorId: string, notes?: string) {
+    const request = await this.prisma.ticketRequest.findUnique({
+      where: { id },
+      include: { event: true, tickets: true },
+    });
+    if (!request) throw new NotFoundException('Ticket request not found');
+    if (request.approvalStatus === 'CANCELLED') {
+      throw new BadRequestException('This ticket request is already cancelled.');
+    }
+
+    const cancelled = await this.prisma.$transaction(async (tx) => {
+      await tx.ticket.updateMany({
+        where: { requestId: id, status: { not: 'USED' } },
+        data: { status: 'INVALIDATED' },
+      });
+      return tx.ticketRequest.update({
+        where: { id },
+        data: {
+          approvalStatus: 'CANCELLED',
+          adminNotes: notes || 'Cancelled by admin.',
+          reviewedById: actorId,
+          reviewedAt: new Date(),
+        },
+      });
+    });
+
+    await this.audit(request.eventId, actorId, 'TICKET_REQUEST_CANCELLED', {
+      requestId: id,
+      ticketNumbers: request.tickets.map((ticket) => ticket.ticketNumber),
+    });
+    return cancelled;
+  }
+
+  async deleteRequest(id: string, actorId: string) {
+    const request = await this.prisma.ticketRequest.findUnique({
+      where: { id },
+      include: { tickets: { select: { ticketNumber: true } } },
+    });
+    if (!request) throw new NotFoundException('Ticket request not found');
+
+    await this.prisma.ticketRequest.delete({ where: { id } });
+    await this.audit(request.eventId, actorId, 'TICKET_REQUEST_DELETED', {
+      requestId: id,
+      requestNumber: request.requestNumber,
+      ticketNumbers: request.tickets.map((ticket) => ticket.ticketNumber),
+    });
+    return { message: 'Ticket request deleted' };
   }
 
   async getMyTickets(userId: string) {
@@ -647,9 +730,34 @@ export class EventsService {
     }
 
     if (markUsed) {
-      const updated = await this.prisma.ticket.update({
+      // The status condition makes check-in safe when two scanner requests arrive together.
+      // Only the request that changes VALID -> USED is accepted as a successful scan.
+      const checkedInAt = new Date();
+      const result = await this.prisma.ticket.updateMany({
+        where: {
+          id: ticket.id,
+          status: 'VALID',
+          request: { approvalStatus: 'CONFIRMED' },
+        },
+        data: { status: 'USED', usedAt: checkedInAt, checkedInById: actorId },
+      });
+      if (result.count === 0) {
+        const latest = await this.prisma.ticket.findUnique({
+          where: { id: ticket.id },
+          include: { event: true, request: true },
+        });
+        if (latest?.status === 'USED') {
+          await this.recordScan(ticket.id, actorId, 'Already Checked In', ipAddress);
+          return this.validationResponse(latest, 'Already Checked In', false);
+        }
+        if (latest) {
+          await this.recordScan(ticket.id, actorId, 'Invalid', ipAddress);
+          return this.validationResponse(latest, 'Invalid', false);
+        }
+        return { status: 'Invalid', valid: false };
+      }
+      const updated = await this.prisma.ticket.findUniqueOrThrow({
         where: { id: ticket.id },
-        data: { status: 'USED', usedAt: new Date(), checkedInById: actorId },
         include: { event: true, request: true },
       });
       await this.recordScan(ticket.id, actorId, 'Valid', ipAddress);

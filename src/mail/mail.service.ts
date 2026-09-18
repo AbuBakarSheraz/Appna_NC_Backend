@@ -1,9 +1,14 @@
-import { Injectable, InternalServerErrorException, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { Resend } from 'resend';
 import { ContactFormDto } from './dto/contact-form.dto';
 
-const SENDER    = process.env.MAIL_FROM!;   // e.g. "APPNA North Carolina <noreply@mail.appnanc.org>"
-const ORG_INBOX = process.env.MAIL_ORG!;    // appnanc@gmail.com (can stay Gmail — you're only changing the SEND side)
+const SENDER = process.env.MAIL_FROM!; // e.g. "APPNA North Carolina <noreply@mail.appnanc.org>"
+const ORG_INBOX = process.env.MAIL_ORG!; // appnanc@gmail.com (can stay Gmail — you're only changing the SEND side)
 
 type ResendAttachment = { filename: string; content: string | Buffer };
 
@@ -36,12 +41,13 @@ export class MailService implements OnModuleInit {
 
     if (error) {
       this.logger.error(`Resend send failed: ${error.message}`);
-      throw new InternalServerErrorException('Email delivery failed. Please try again later.');
+      throw new InternalServerErrorException(
+        'Email delivery failed. Please try again later.',
+      );
     }
 
     return data;
   }
-
 
   async sendAlreadyMemberRequestSubmitted(dto: {
     memberName: string;
@@ -89,7 +95,7 @@ export class MailService implements OnModuleInit {
       }),
     ]);
   }
-  
+
   async sendSponsorshipPaymentReceived(dto: {
     businessName: string;
     contactName: string;
@@ -126,7 +132,10 @@ export class MailService implements OnModuleInit {
           `,
         }),
         attachments: this.attachmentsFromDataUrls([
-          { dataUrl: dto.receiptDataUrl, filename: `sponsorship-receipt-${dto.businessName}.png` },
+          {
+            dataUrl: dto.receiptDataUrl,
+            filename: `sponsorship-receipt-${dto.businessName}.png`,
+          },
         ]),
       }),
       this.send({
@@ -144,7 +153,10 @@ export class MailService implements OnModuleInit {
           `,
         }),
         attachments: this.attachmentsFromDataUrls([
-          { dataUrl: dto.receiptDataUrl, filename: 'appna-nc-sponsorship-receipt.png' },
+          {
+            dataUrl: dto.receiptDataUrl,
+            filename: 'appna-nc-sponsorship-receipt.png',
+          },
         ]),
       }),
     ]);
@@ -271,7 +283,10 @@ export class MailService implements OnModuleInit {
       }),
       attachments: this.attachmentsFromDataUrls([
         dto.membershipCardDataUrl
-          ? { dataUrl: dto.membershipCardDataUrl, filename: 'appna-nc-membership-card.png' }
+          ? {
+              dataUrl: dto.membershipCardDataUrl,
+              filename: 'appna-nc-membership-card.png',
+            }
           : null,
       ]),
     });
@@ -292,11 +307,14 @@ export class MailService implements OnModuleInit {
         subtitle: 'APPNA North Carolina',
         body: `
           <h2>Hi ${dto.memberName},</h2>
-          <p>Your <strong>${dto.membershipType}</strong> membership expired on <strong>${dto.expiredAt.toLocaleDateString('en-US', {
-            month: 'long',
-            day: 'numeric',
-            year: 'numeric',
-          })}</strong>.</p>
+          <p>Your <strong>${dto.membershipType}</strong> membership expired on <strong>${dto.expiredAt.toLocaleDateString(
+            'en-US',
+            {
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric',
+            },
+          )}</strong>.</p>
           <div class="highlight">Annual memberships expire on <strong>December 31</strong> each year. Please renew from your member portal to restore full access.</div>
           <p>Warm regards,<br/><strong>APPNA NC Team</strong></p>
         `,
@@ -376,7 +394,6 @@ export class MailService implements OnModuleInit {
       registrationNumber: string;
       ticketImageDataUrl?: string | null;
     }>;
-    ticketAccessUrl?: string;
   }): Promise<void> {
     const eventDate = dto.eventDate.toLocaleDateString('en-US', {
       month: 'long',
@@ -386,20 +403,29 @@ export class MailService implements OnModuleInit {
 
     const tickets = dto.tickets?.length
       ? dto.tickets
-      : [{
-          ticketNumber: dto.ticketNumber ?? 'Pending',
-          registrationNumber: dto.registrationNumber ?? 'Pending',
-          ticketImageDataUrl: dto.ticketImageDataUrl,
-        }];
-    const ticketRows = tickets.map((ticket, index) => `
+      : [
+          {
+            ticketNumber: dto.ticketNumber ?? 'Pending',
+            registrationNumber: dto.registrationNumber ?? 'Pending',
+            ticketImageDataUrl: dto.ticketImageDataUrl,
+          },
+        ];
+    const ticketRows = tickets
+      .map(
+        (ticket, index) => `
       <strong>Ticket ${index + 1}:</strong> ${ticket.ticketNumber}<br/>
       <strong>Registration ${index + 1}:</strong> ${ticket.registrationNumber}
-    `).join('<br/>');
+    `,
+      )
+      .join('<br/>');
 
     await this.send({
       from: `APPNA NC Events <${this.extractEmail(SENDER)}>`,
       to: dto.attendeeEmail,
-      subject: tickets.length > 1 ? 'Your Event Tickets Have Been Approved and PNG files are attached with this email' : 'Your Event Ticket Has Been Approved and PNG file is attached with this email',
+      subject:
+        tickets.length > 1
+          ? 'Your Event Tickets Have Been Approved and PNG files are attached with this email'
+          : 'Your Event Ticket Has Been Approved and PNG file is attached with this email',
       html: this.wrapEmail({
         title: tickets.length > 1 ? 'Tickets Approved' : 'Ticket Approved',
         subtitle: 'APPNA North Carolina Events',
@@ -412,17 +438,19 @@ export class MailService implements OnModuleInit {
             <strong>Time:</strong> ${dto.eventTime}<br/>
             <strong>Location:</strong> ${dto.eventLocation}
           </div>
-          <p>Please bring the attached ticket or have it ready on your phone for QR check-in.</p>
-          <p>If you are APPNA NC member you can your tickets from Member panel through the following button or you can get membership.</p>
-
-
-          ${dto.ticketAccessUrl ? `<p><a class="btn" href="${dto.ticketAccessUrl}">Open My Tickets</a></p>` : ''}
+          <p>Your ticket is attached to this email as a PNG file. Please bring the attached ticket, or have it ready on your phone, for QR check-in at the event.</p>
+          <p>Please do not reply to this system-generated email. For assistance, contact <a href="mailto:appnanc@gmail.com">appnanc@gmail.com</a>.</p>
         `,
       }),
       attachments: this.attachmentsFromDataUrls(
-        tickets.map((ticket) => ticket.ticketImageDataUrl
-          ? { dataUrl: ticket.ticketImageDataUrl, filename: `${ticket.ticketNumber}.png` }
-          : null),
+        tickets.map((ticket) =>
+          ticket.ticketImageDataUrl
+            ? {
+                dataUrl: ticket.ticketImageDataUrl,
+                filename: `${ticket.ticketNumber}.png`,
+              }
+            : null,
+        ),
       ),
     });
   }
@@ -524,7 +552,7 @@ export class MailService implements OnModuleInit {
   private sendLeadToOrg(dto: ContactFormDto) {
     const year = new Date().getFullYear();
     const submittedAt = new Date().toLocaleString('en-US', {
-      timeZone:  'America/New_York',
+      timeZone: 'America/New_York',
       dateStyle: 'full',
       timeStyle: 'short',
     });
@@ -629,7 +657,9 @@ export class MailService implements OnModuleInit {
     items: Array<{ dataUrl: string; filename: string } | null | undefined>,
   ): ResendAttachment[] | undefined {
     const attachments = items
-      .filter((item): item is { dataUrl: string; filename: string } => Boolean(item))
+      .filter((item): item is { dataUrl: string; filename: string } =>
+        Boolean(item),
+      )
       .map((item) => {
         const base64 = item.dataUrl.includes(',')
           ? item.dataUrl.split(',')[1]
@@ -645,9 +675,6 @@ export class MailService implements OnModuleInit {
     return match ? match[1] : fromString;
   }
 }
-
-
-
 
 // import { Injectable, InternalServerErrorException, Logger, OnModuleInit } from '@nestjs/common';
 // import * as nodemailer from 'nodemailer';
@@ -875,7 +902,6 @@ export class MailService implements OnModuleInit {
 //       registrationNumber: string;
 //       ticketImageDataUrl?: string | null;
 //     }>;
-//     ticketAccessUrl?: string;
 //   }): Promise<void> {
 //     const eventDate = dto.eventDate.toLocaleDateString('en-US', {
 //       month: 'long',
@@ -912,7 +938,6 @@ export class MailService implements OnModuleInit {
 //             <strong>Location:</strong> ${dto.eventLocation}
 //           </div>
 //           <p>Please bring the attached ticket or have it ready on your phone for QR check-in.</p>
-//           ${dto.ticketAccessUrl ? `<p><a class="btn" href="${dto.ticketAccessUrl}">Open My Tickets</a></p>` : ''}
 //         `,
 //       }),
 //       attachments: this.attachmentsFromDataUrls(

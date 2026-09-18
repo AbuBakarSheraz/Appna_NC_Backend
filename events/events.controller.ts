@@ -83,8 +83,14 @@ export class AdminEventsController {
   }
 
   @Get('requests')
-  listRequests(@Query('status') status?: string, @Query('search') search?: string) {
-    return this.eventsService.listRequests(status, search);
+  listRequests(
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('eventId') eventId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.eventsService.listRequests(status, search, eventId, Number(page), Number(limit));
   }
 
   @Get('notifications')
@@ -93,8 +99,14 @@ export class AdminEventsController {
   }
 
   @Get(':id')
-  getEvent(@Param('id') id: string, @Query('status') status?: string, @Query('search') search?: string) {
-    return this.eventsService.getAdminEvent(id, status, search);
+  getEvent(
+    @Param('id') id: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.eventsService.getAdminEvent(id, status, search, Number(page), Number(limit));
   }
 
   @Post()
@@ -125,6 +137,16 @@ export class AdminEventsController {
   @Post('requests/:id/reject')
   reject(@Param('id') id: string, @Req() req, @Body('notes') notes?: string) {
     return this.eventsService.rejectRequest(id, req.user.userId, notes);
+  }
+
+  @Post('requests/:id/cancel')
+  cancel(@Param('id') id: string, @Req() req, @Body('notes') notes?: string) {
+    return this.eventsService.cancelRequest(id, req.user.userId, notes);
+  }
+
+  @Post('requests/:id/delete')
+  delete(@Param('id') id: string, @Req() req) {
+    return this.eventsService.deleteRequest(id, req.user.userId);
   }
 
   @Post(':eventId/cash-tickets')
