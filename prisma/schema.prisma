@@ -267,6 +267,22 @@ model Event {
   @@index([slug])
 }
 
+model CmeEntry {
+  id         String   @id @default(uuid())
+  fullName   String
+  university String
+  phone      String
+  email      String
+  specialty  String
+  state      String
+  city       String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([email])
+  @@index([createdAt])
+}
+
 model EventRegistrationField {
   id        String                @id @default(uuid())
   eventId   String

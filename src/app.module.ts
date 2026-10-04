@@ -10,6 +10,7 @@ import { MailModule } from './mail/mail.module';
 import { EventsModule } from '../events/events.module';
 import { AlreadyAMemberModule } from 'already_a_member/already_a_member.module';
 import { SponsorshipModule } from '../sponsorship/sponsorship.module';
+import { CmeModule } from '../cme/cme.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { SponsorshipModule } from '../sponsorship/sponsorship.module';
     EventsModule,
      AlreadyAMemberModule,
      SponsorshipModule,
+     CmeModule,
   ],
   controllers: [AppController],
   providers: [AppService],

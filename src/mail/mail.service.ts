@@ -478,6 +478,52 @@ export class MailService implements OnModuleInit {
     });
   }
 
+  async sendCmeSubmission(dto: {
+    fullName: string;
+    university: string;
+    phone: string;
+    email: string;
+    specialty: string;
+    state: string;
+    city: string;
+    createdAt: Date;
+  }): Promise<void> {
+    const submittedAt = this.formatEasternTime(dto.createdAt);
+    const details = `
+      <div class="highlight">
+        <strong>Full name:</strong> ${dto.fullName}<br/>
+        <strong>University:</strong> ${dto.university}<br/>
+        <strong>Email:</strong> <a href="mailto:${dto.email}">${dto.email}</a><br/>
+        <strong>Phone:</strong> ${dto.phone}<br/>
+        <strong>Specialty:</strong> ${dto.specialty}<br/>
+        <strong>Location:</strong> ${dto.city}, ${dto.state}
+      </div>`;
+
+    await Promise.all([
+      this.send({
+        from: `APPNA NC CME <${this.extractEmail(SENDER)}>`,
+        to: dto.email,
+        subject: 'We received your APPNA NC CME form',
+        html: this.wrapEmail({
+          title: 'CME Form Received',
+          subtitle: 'APPNA North Carolina',
+          body: `<h2>Hi ${dto.fullName},</h2><p>Thank you for your interest in APPNA North Carolina continuing medical education. We received your form and will follow up with CME details.</p>${details}<p>Warm regards,<br/><strong>APPNA NC Team</strong></p>`,
+        }),
+      }),
+      this.send({
+        from: `APPNA NC CME <${this.extractEmail(SENDER)}>`,
+        to: [...new Set([ORG_INBOX, 'appnanc@gmail.com'].filter(Boolean))],
+        replyTo: dto.email,
+        subject: `New CME form submission - ${dto.fullName}`,
+        html: this.wrapEmail({
+          title: 'New CME Submission',
+          subtitle: submittedAt,
+          body: `<h2>CME interest form received</h2>${details}<p><a class="btn" href="mailto:${dto.email}">Reply to ${dto.fullName}</a></p>`,
+        }),
+      }),
+    ]);
+  }
+
   async sendEventReminder(dto: {
     attendeeName: string;
     attendeeEmail: string;
