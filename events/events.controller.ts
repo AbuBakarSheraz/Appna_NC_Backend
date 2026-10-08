@@ -56,6 +56,24 @@ export class TicketsController {
   }
 }
 
+/**
+ * Deliberately separate from the admin controller: this is a bearer-link
+ * capability for event-day volunteers, not an admin session.
+ */
+@Controller('check-in')
+export class PublicCheckInController {
+  constructor(private readonly eventsService: EventsService) {}
+
+  @Post('validate')
+  validate(
+    @Headers('x-scanner-token') scannerToken: string | undefined,
+    @Req() req,
+    @Body() dto: ValidateTicketDto,
+  ) {
+    return this.eventsService.validateTicketWithScannerToken(dto.qrPayload, scannerToken, req.ip);
+  }
+}
+
 @UseGuards(JwtAuthGuard)
 @Controller('notifications')
 export class NotificationsController {

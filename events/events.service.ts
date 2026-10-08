@@ -1,8 +1,10 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { NotificationType, Prisma, TicketRequestStatus } from '@prisma/client';
 import * as crypto from 'crypto';
@@ -703,7 +705,27 @@ export class EventsService {
     });
   }
 
-  async validateTicket(qrPayload: string, actorId: string, ipAddress?: string, markUsed = true) {
+  /**
+   * Allows an event-day scanner link to perform exactly one action: validate
+   * and check in a ticket. It intentionally has no JWT and no admin rights.
+   */
+  async validateTicketWithScannerToken(qrPayload: string, scannerToken?: string, ipAddress?: string) {
+    const configuredToken = process.env.SCANNER_ACCESS_TOKEN;
+    if (!configuredToken) {
+      this.logger.error('SCANNER_ACCESS_TOKEN is not configured; public check-in is disabled.');
+      throw new ServiceUnavailableException('Scanner is not configured.');
+    }
+
+    if (!scannerToken || !this.safeTokenEqual(scannerToken, configuredToken)) {
+      throw new ForbiddenException('Invalid scanner link.');
+    }
+
+    // No user is impersonated. TicketCheckIn retains the scan and IP, while
+    // checkedInById is null to make clear it came through the shared scanner.
+    return this.validateTicket(qrPayload, null, ipAddress, true);
+  }
+
+  async validateTicket(qrPayload: string, actorId: string | null, ipAddress?: string, markUsed = true) {
     const decoded = this.verifyQrPayload(qrPayload);
     const ticket = await this.prisma.ticket.findUnique({
       where: { id: decoded.ticketId },
@@ -1086,7 +1108,14 @@ export class EventsService {
     });
   }
 
-  private async recordScan(ticketId: string, actorId: string, result: string, ipAddress?: string) {
+  private safeTokenEqual(received: string, expected: string) {
+    const receivedBuffer = Buffer.from(received);
+    const expectedBuffer = Buffer.from(expected);
+    return receivedBuffer.length === expectedBuffer.length
+      && crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
+  }
+
+  private async recordScan(ticketId: string, actorId: string | null, result: string, ipAddress?: string) {
     await this.prisma.ticketCheckIn.create({
       data: { ticketId, checkedInBy: actorId, result, ipAddress },
     });
