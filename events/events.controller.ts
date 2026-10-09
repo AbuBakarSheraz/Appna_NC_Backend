@@ -116,6 +116,11 @@ export class AdminEventsController {
     return this.eventsService.listAdminNotifications();
   }
 
+  @Get('tickets/by-email')
+  findTicketsByEmail(@Query('email') email?: string, @Req() req?) {
+    return this.eventsService.findTicketsByEmailForAdmin(email ?? '', req.user.userId);
+  }
+
   @Get(':id')
   getEvent(
     @Param('id') id: string,
@@ -175,5 +180,10 @@ export class AdminEventsController {
   @Post('tickets/validate')
   validate(@Req() req, @Body() dto: ValidateTicketDto) {
     return this.eventsService.validateTicket(dto.qrPayload, req.user.userId, req.ip, true);
+  }
+
+  @Post('tickets/:ticketNumber/reset-check-in')
+  resetCheckIn(@Param('ticketNumber') ticketNumber: string, @Req() req) {
+    return this.eventsService.resetTicketCheckIn(ticketNumber, req.user.userId, req.ip);
   }
 }

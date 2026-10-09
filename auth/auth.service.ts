@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { PrismaService } from 'prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
@@ -127,6 +128,22 @@ async register(dto: RegisterDto, file?: Express.Multer.File) {
 
   return this.issueTokens(user.id);
 }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const email = dto.email.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) throw new BadRequestException('No account exists for this email address.');
+
+    const password = await bcrypt.hash(dto.password, 10);
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: user.id }, data: { password } }),
+      // A password change should sign out any existing sessions immediately.
+      this.prisma.refreshToken.deleteMany({ where: { userId: user.id } }),
+    ]);
+
+    return { message: 'Password updated. You can now sign in with your new password.' };
+  }
+
   // ================= LOGIN =================
   async login(dto: LoginDto) {
     if (!dto.email || !dto.password) {

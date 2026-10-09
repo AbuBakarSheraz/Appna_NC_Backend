@@ -706,6 +706,43 @@ export class EventsService {
   }
 
   /**
+   * Admin-only recovery lookup for attendees who did not receive the approval
+   * email. The ticket card is the exact PNG stored when the ticket was issued.
+   */
+  async findTicketsByEmailForAdmin(email: string, actorId: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) throw new BadRequestException('Enter an email address.');
+
+    const tickets = await this.prisma.ticket.findMany({
+      where: { attendeeEmail: { equals: normalizedEmail } },
+      orderBy: { issueDate: 'desc' },
+      include: {
+        event: { select: { id: true, title: true, date: true, startTime: true, endTime: true, venue: true } },
+        request: { select: { requestNumber: true, approvalStatus: true, paymentStatus: true } },
+      },
+    });
+
+    await this.audit(null, actorId, 'TICKET_RECOVERY_LOOKUP', {
+      email: normalizedEmail,
+      ticketsFound: tickets.length,
+    });
+
+    return tickets.map((ticket) => ({
+      id: ticket.id,
+      ticketNumber: ticket.ticketNumber,
+      registrationNumber: ticket.registrationNumber,
+      ticketIndex: ticket.ticketIndex,
+      attendeeName: ticket.attendeeName,
+      attendeeEmail: ticket.attendeeEmail,
+      status: ticket.status,
+      issueDate: ticket.issueDate,
+      ticketImageDataUrl: ticket.ticketImageDataUrl,
+      event: ticket.event,
+      request: ticket.request,
+    }));
+  }
+
+  /**
    * Allows an event-day scanner link to perform exactly one action: validate
    * and check in a ticket. It intentionally has no JWT and no admin rights.
    */
@@ -787,6 +824,29 @@ export class EventsService {
     }
 
     return this.validationResponse(ticket, 'Valid', true);
+  }
+
+  async resetTicketCheckIn(ticketNumber: string, actorId: string, ipAddress?: string) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { ticketNumber },
+      include: { event: true, request: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found.');
+    if (ticket.request.approvalStatus !== 'CONFIRMED') {
+      throw new BadRequestException('Only confirmed tickets can be reset.');
+    }
+    if (ticket.status !== 'USED') {
+      throw new BadRequestException('This ticket is not currently checked in.');
+    }
+
+    const restored = await this.prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { status: 'VALID', usedAt: null, checkedInById: null },
+      include: { event: true, request: true },
+    });
+    await this.recordScan(ticket.id, actorId, 'Check-In Reset', ipAddress);
+    await this.audit(ticket.eventId, actorId, 'TICKET_CHECK_IN_RESET', { ticketNumber });
+    return this.validationResponse(restored, 'Check-in reset', true);
   }
 
   async listMyNotifications(userId: string) {
